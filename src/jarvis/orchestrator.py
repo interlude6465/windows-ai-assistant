@@ -88,7 +88,7 @@ class Orchestrator:
             }
 
         logger.info(f"System action router available: {self.system_action_router}")
-        results = []
+        results: List[Dict[str, Any]] = []
 
         for step in sorted(plan.steps, key=lambda s: s.step_number):
             logger.info(f"---------- Step {step.step_number}/{len(plan.steps)} ----------")
@@ -181,6 +181,15 @@ class Orchestrator:
                 logger.info(f"Parsed action_type: {action_type}")
                 logger.info(f"Parsed params: {params}")
                 logger.info("Routing action to system_action_router...")
+
+                if self.system_action_router is None:
+                    return {
+                        "step_number": step.step_number,
+                        "description": step.description,
+                        "success": False,
+                        "message": "System action router not available",
+                        "data": None,
+                    }
 
                 result = self.system_action_router.route_action(action_type, **params)
 
@@ -325,13 +334,13 @@ class Orchestrator:
                 return "file_create", {"file_path": file_path, "content": content}
 
             elif "delete" in description_lower:
-                filename = extract_filename(description)
+                del_filename = extract_filename(description)
                 location = extract_location(description_lower)
 
-                if filename and location:
-                    file_path = str(Path(location) / filename)
-                elif filename:
-                    file_path = filename
+                if del_filename and location:
+                    file_path = str(Path(location) / del_filename)
+                elif del_filename:
+                    file_path = del_filename
                 else:
                     file_path = "temp.txt"
 
