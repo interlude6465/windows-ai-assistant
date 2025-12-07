@@ -5,6 +5,7 @@ Implements a ChatGPT-like chat mode for continuous conversation with Jarvis,
 maintaining context across multiple user inputs.
 """
 
+import json
 import logging
 import sys
 from datetime import datetime
@@ -185,8 +186,6 @@ class ChatSession:
             lines.append(f"Message: {result['message']}")
 
         if result.get("data"):
-            import json
-
             try:
                 data_str = json.dumps(result["data"], indent=2)
                 lines.append(f"Data:\n{data_str}")
@@ -343,7 +342,7 @@ class ChatSession:
                     full_response = "".join(full_response_parts)
 
                     # Extract metadata from controller
-                    metadata = {}
+                    metadata: Dict[str, Any] = {}
                     if controller_result:
                         metadata["controller_result"] = (
                             controller_result.to_dict()

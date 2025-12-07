@@ -298,6 +298,134 @@ class Orchestrator:
 
             return None
 
+        # Helper to extract text to type
+        def extract_text_to_type(desc: str) -> Optional[str]:
+            """Extract text to type from description."""
+            # Look for quoted text after "type", "write", "enter"
+            match = re.search(r'(?:type|write|enter)\s+["\']([^"\']+)["\']', desc, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+            # Look for quoted text in general
+            match = re.search(r'["\']([^"\']+)["\']', desc)
+            if match:
+                return match.group(1)
+
+            return None
+
+        # Helper to extract application name
+        def extract_application_name(desc: str) -> Optional[str]:
+            """Extract application name from description."""
+            # Common Windows applications mapping
+            app_patterns = {
+                r"notepad": "notepad.exe",
+                r"calculator|calc": "calc.exe",
+                r"paint": "mspaint.exe",
+                r"explorer|file explorer|windows explorer": "explorer.exe",
+                r"cmd|command prompt": "cmd.exe",
+                r"powershell": "powershell.exe",
+                r"task manager|taskmgr": "taskmgr.exe",
+                r"control panel": "control.exe",
+                r"settings": "ms-settings:",
+                r"snipping tool": "snippingtool.exe",
+                r"wordpad": "write.exe",
+                r"registry editor|regedit": "regedit.exe",
+                r"character map|charmap": "charmap.exe",
+            }
+
+            desc_lower = desc.lower()
+            for pattern, app_path in app_patterns.items():
+                if re.search(pattern, desc_lower):
+                    return app_path
+
+            # Try to extract application name from quotes or after "open/launch/start/run"
+            app_match = re.search(
+                r'(?:open|launch|start|run|navigate to)\s+["\']?([a-zA-Z0-9_\-\.]+(?:\.exe)?)["\']?',  # noqa: E501
+                desc_lower,
+                re.IGNORECASE,
+            )
+            if app_match:
+                app_name = app_match.group(1)
+                if not app_name.endswith(".exe"):
+                    app_name += ".exe"
+                return app_name
+
+            return None
+
+        # Handle compound actions first (e.g., "Open Notepad and create a new file")
+        if " and " in description_lower:
+            parts = description_lower.split(" and ")
+            if len(parts) == 2:
+                first_part, second_part = parts
+
+                # Check if first part is opening an application and second is file creation
+                if any(
+                    keyword in first_part
+                    for keyword in ["open", "launch", "start", "run", "navigate to"]
+                ) and any(
+                    keyword in second_part for keyword in ["create", "new", "make", "generate"]
+                ):
+                    app_name = extract_application_name(first_part)
+                    if app_name:
+                        logger.info(f"Compound action: launching {app_name} for file creation")
+                        return "subprocess_open_application", {"application_path": app_name}
+
+                # Check if first part is opening an application and second is typing
+                if any(
+                    keyword in first_part
+                    for keyword in ["open", "launch", "start", "run", "navigate to"]
+                ) and any(keyword in second_part for keyword in ["type", "write", "enter"]):
+                    app_name = extract_application_name(first_part)
+                    text_to_type = extract_text_to_type(second_part)
+                    if app_name and text_to_type:
+                        # For now, focus on the typing action as the primary intent
+                        logger.info(
+                            f"Compound action: typing '{text_to_type}' after opening {app_name}"
+                        )
+                        return "typing_type_text", {"text": text_to_type}
+                    elif app_name:
+                        # Just launch the app if no specific text to type
+                        logger.info(f"Compound action: launching {app_name}")
+                        return "subprocess_open_application", {"application_path": app_name}
+
+                # Check if first part is opening an application (general case)
+                if any(
+                    keyword in first_part
+                    for keyword in ["open", "launch", "start", "run", "navigate to"]
+                ):
+                    app_name = extract_application_name(first_part)
+                    if app_name:
+                        logger.info(f"Compound action: launching {app_name}")
+                        return "subprocess_open_application", {"application_path": app_name}
+
+        # Enhanced typing operations - check this before general app launching
+        if any(keyword in description_lower for keyword in ["type", "write", "enter"]):
+            text = extract_text_to_type(description)
+            if text:
+                logger.info(f"Parsed typing_type_text action: text={text}")
+                return "typing_type_text", {"text": text}
+            else:
+                # Check if this is typing in a specific application context
+                if "notepad" in description_lower or "file" in description_lower:
+                    logger.info(
+                        "Parsed typing_type_text action with default text for application context"
+                    )
+                    return "typing_type_text", {"text": "hello world"}
+                else:
+                    # Default text if none found
+                    logger.info("Parsed typing_type_text action with default text")
+                    return "typing_type_text", {"text": "hello world"}
+
+        # Application launch operations (enhanced)
+        if any(
+            keyword in description_lower
+            for keyword in ["open", "launch", "start", "run", "navigate to"]
+        ):
+            app_name = extract_application_name(description)
+            if app_name:
+                logger.info(f"Parsed application launch: {app_name}")
+                return "subprocess_open_application", {"application_path": app_name}
+
         # File operations
         if "file" in tool.lower() or "file" in description_lower:
             if "list" in description_lower:
@@ -416,43 +544,6 @@ class Orchestrator:
                 logger.info(f"Parsed gui_move_mouse action: x={x}, y={y}")
                 return "gui_move_mouse", {"x": x, "y": y}
 
-        # Application launch operations (before PowerShell/subprocess to catch specific apps)
-        if any(keyword in description_lower for keyword in ["open", "launch", "start", "run"]):
-            # Common Windows applications mapping
-            app_patterns = {
-                r"notepad": "notepad.exe",
-                r"calculator|calc": "calc.exe",
-                r"paint": "mspaint.exe",
-                r"explorer|file explorer|windows explorer": "explorer.exe",
-                r"cmd|command prompt": "cmd.exe",
-                r"powershell": "powershell.exe",
-                r"task manager|taskmgr": "taskmgr.exe",
-                r"control panel": "control.exe",
-                r"settings": "ms-settings:",
-                r"snipping tool": "snippingtool.exe",
-                r"wordpad": "write.exe",
-                r"registry editor|regedit": "regedit.exe",
-                r"character map|charmap": "charmap.exe",
-            }
-
-            for pattern, app_path in app_patterns.items():
-                if re.search(pattern, description_lower):
-                    logger.info(f"Parsed application launch: {app_path}")
-                    return "subprocess_open_application", {"application_path": app_path}
-
-            # Try to extract application name from quotes or after "open/launch/start/run"
-            app_match = re.search(
-                r'(?:open|launch|start|run)\s+["\']?([a-zA-Z0-9_\-\.]+(?:\.exe)?)["\']?',
-                description_lower,
-                re.IGNORECASE,
-            )
-            if app_match:
-                app_name = app_match.group(1)
-                if not app_name.endswith(".exe"):
-                    app_name += ".exe"
-                logger.info(f"Parsed generic application launch: {app_name}")
-                return "subprocess_open_application", {"application_path": app_name}
-
         # PowerShell operations
         if "powershell" in tool.lower():
             # Try to extract command
@@ -491,20 +582,6 @@ class Orchestrator:
                 image_path = extract_filename(description) or "screenshot.png"
                 logger.info(f"Parsed ocr_extract_from_image action: image_path={image_path}")
                 return "ocr_extract_from_image", {"image_path": image_path}
-
-        # Typing operations
-        if "type" in tool.lower() or "keyboard" in description_lower:
-            # Try to extract text to type
-            text_match = re.search(
-                r'(?:type|write|enter)\s+["\']([^"\']+)["\']', description, re.IGNORECASE
-            )
-            if text_match:
-                text = text_match.group(1)
-            else:
-                text = "hello world"
-
-            logger.info(f"Parsed typing_type_text action: text={text}")
-            return "typing_type_text", {"text": text}
 
         # Registry operations
         if "registry" in tool.lower():
