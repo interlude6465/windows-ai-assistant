@@ -6,19 +6,26 @@ dry-run semantics and safety checks.
 """
 
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 
 try:
+    # Prevent mouseinfo from failing in headless environments
+    if not os.environ.get("DISPLAY"):
+        os.environ["DISPLAY"] = ":0"
+
     import pyautogui
+
     PYAUTOGUI_AVAILABLE = True
-except ImportError:
+except (ImportError, KeyError, Exception):
     PYAUTOGUI_AVAILABLE = False
 
 try:
     import pytesseract
     from PIL import Image
+
     PYTESSERACT_AVAILABLE = True
 except ImportError:
     PYTESSERACT_AVAILABLE = False
@@ -26,6 +33,7 @@ except ImportError:
 try:
     import ctypes
     from ctypes import wintypes
+
     WINDOWS_OCR_AVAILABLE = True
 except ImportError:
     WINDOWS_OCR_AVAILABLE = False
@@ -52,14 +60,14 @@ class OCRActions:
         """
         self.dry_run = dry_run
         self.tesseract_path = tesseract_path
-        
+
         if tesseract_path and PYTESSERACT_AVAILABLE:
             pytesseract.pytesseract.tesseract_cmd = tesseract_path
-            
+
         if PYAUTOGUI_AVAILABLE:
             pyautogui.FAILSAFE = True
             pyautogui.PAUSE = 0.1
-            
+
         logger.info("OCRActions initialized")
 
     def extract_text_from_image(self, image_path: str, language: str = "eng") -> ActionResult:
@@ -74,13 +82,13 @@ class OCRActions:
             ActionResult with extracted text or error
         """
         logger.info(f"Extracting text from image: {image_path}")
-        
+
         if not PYTESSERACT_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="extract_text_from_image",
                 message="pytesseract not available",
-                error="Install pytesseract and pillow to use OCR features"
+                error="Install pytesseract and pillow to use OCR features",
             )
 
         if self.dry_run:
@@ -88,13 +96,13 @@ class OCRActions:
                 success=True,
                 action_type="extract_text_from_image",
                 message=f"[DRY-RUN] Would extract text from {image_path}",
-                data={"image_path": image_path, "language": language, "dry_run": True}
+                data={"image_path": image_path, "language": language, "dry_run": True},
             )
 
         try:
             image = Image.open(image_path)
             text = pytesseract.image_to_string(image, lang=language)
-            
+
             return ActionResult(
                 success=True,
                 action_type="extract_text_from_image",
@@ -104,8 +112,8 @@ class OCRActions:
                     "image_path": image_path,
                     "language": language,
                     "character_count": len(text),
-                    "word_count": len(text.split())
-                }
+                    "word_count": len(text.split()),
+                },
             )
         except Exception as e:
             logger.error(f"Error extracting text from image: {e}")
@@ -113,7 +121,7 @@ class OCRActions:
                 success=False,
                 action_type="extract_text_from_image",
                 message="Failed to extract text from image",
-                error=str(e)
+                error=str(e),
             )
 
     def extract_text_from_screen(
@@ -130,13 +138,13 @@ class OCRActions:
             ActionResult with extracted text or error
         """
         logger.info(f"Extracting text from screen (region={region})")
-        
+
         if not PYAUTOGUI_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="extract_text_from_screen",
                 message="pyautogui not available",
-                error="Install pyautogui to use screen OCR features"
+                error="Install pyautogui to use screen OCR features",
             )
 
         if not PYTESSERACT_AVAILABLE:
@@ -144,7 +152,7 @@ class OCRActions:
                 success=False,
                 action_type="extract_text_from_screen",
                 message="pytesseract not available",
-                error="Install pytesseract and pillow to use OCR features"
+                error="Install pytesseract and pillow to use OCR features",
             )
 
         if self.dry_run:
@@ -152,7 +160,7 @@ class OCRActions:
                 success=True,
                 action_type="extract_text_from_screen",
                 message=f"[DRY-RUN] Would extract text from screen (region={region})",
-                data={"region": region, "language": language, "dry_run": True}
+                data={"region": region, "language": language, "dry_run": True},
             )
 
         try:
@@ -164,7 +172,7 @@ class OCRActions:
 
             # Extract text
             text = pytesseract.image_to_string(screenshot, lang=language)
-            
+
             return ActionResult(
                 success=True,
                 action_type="extract_text_from_screen",
@@ -174,8 +182,8 @@ class OCRActions:
                     "region": region,
                     "language": language,
                     "character_count": len(text),
-                    "word_count": len(text.split())
-                }
+                    "word_count": len(text.split()),
+                },
             )
         except Exception as e:
             logger.error(f"Error extracting text from screen: {e}")
@@ -183,12 +191,10 @@ class OCRActions:
                 success=False,
                 action_type="extract_text_from_screen",
                 message="Failed to extract text from screen",
-                error=str(e)
+                error=str(e),
             )
 
-    def extract_text_with_boxes(
-        self, image_path: str, language: str = "eng"
-    ) -> ActionResult:
+    def extract_text_with_boxes(self, image_path: str, language: str = "eng") -> ActionResult:
         """
         Extract text with bounding box information from an image.
 
@@ -200,13 +206,13 @@ class OCRActions:
             ActionResult with text and bounding box data or error
         """
         logger.info(f"Extracting text with boxes from image: {image_path}")
-        
+
         if not PYTESSERACT_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="extract_text_with_boxes",
                 message="pytesseract not available",
-                error="Install pytesseract and pillow to use OCR features"
+                error="Install pytesseract and pillow to use OCR features",
             )
 
         if self.dry_run:
@@ -214,31 +220,33 @@ class OCRActions:
                 success=True,
                 action_type="extract_text_with_boxes",
                 message=f"[DRY-RUN] Would extract text with boxes from {image_path}",
-                data={"image_path": image_path, "language": language, "dry_run": True}
+                data={"image_path": image_path, "language": language, "dry_run": True},
             )
 
         try:
             image = Image.open(image_path)
-            data = pytesseract.image_to_data(image, lang=language, output_type=pytesseract.Output.DICT)
-            
+            data = pytesseract.image_to_data(
+                image, lang=language, output_type=pytesseract.Output.DICT
+            )
+
             # Process the data to extract text with bounding boxes
             boxes = []
             full_text = ""
-            
-            for i in range(len(data['text'])):
-                text = data['text'][i].strip()
+
+            for i in range(len(data["text"])):
+                text = data["text"][i].strip()
                 if text:
                     box = {
                         "text": text,
-                        "left": data['left'][i],
-                        "top": data['top'][i],
-                        "width": data['width'][i],
-                        "height": data['height'][i],
-                        "confidence": data['conf'][i]
+                        "left": data["left"][i],
+                        "top": data["top"][i],
+                        "width": data["width"][i],
+                        "height": data["height"][i],
+                        "confidence": data["conf"][i],
                     }
                     boxes.append(box)
                     full_text += text + " "
-            
+
             return ActionResult(
                 success=True,
                 action_type="extract_text_with_boxes",
@@ -248,8 +256,8 @@ class OCRActions:
                     "boxes": boxes,
                     "image_path": image_path,
                     "language": language,
-                    "element_count": len(boxes)
-                }
+                    "element_count": len(boxes),
+                },
             )
         except Exception as e:
             logger.error(f"Error extracting text with boxes: {e}")
@@ -257,7 +265,7 @@ class OCRActions:
                 success=False,
                 action_type="extract_text_with_boxes",
                 message="Failed to extract text with boxes",
-                error=str(e)
+                error=str(e),
             )
 
     def get_available_languages(self) -> ActionResult:
@@ -268,22 +276,22 @@ class OCRActions:
             ActionResult with available languages or error
         """
         logger.info("Getting available OCR languages")
-        
+
         if not PYTESSERACT_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="get_available_languages",
                 message="pytesseract not available",
-                error="Install pytesseract to get available languages"
+                error="Install pytesseract to get available languages",
             )
 
         try:
-            languages = pytesseract.get_languages(config='')
+            languages = pytesseract.get_languages(config="")
             return ActionResult(
                 success=True,
                 action_type="get_available_languages",
                 message=f"Found {len(languages)} available languages",
-                data={"languages": languages, "count": len(languages)}
+                data={"languages": languages, "count": len(languages)},
             )
         except Exception as e:
             logger.error(f"Error getting available languages: {e}")
@@ -291,7 +299,7 @@ class OCRActions:
                 success=False,
                 action_type="get_available_languages",
                 message="Failed to get available languages",
-                error=str(e)
+                error=str(e),
             )
 
     def windows_ocr_from_screen(
@@ -307,13 +315,13 @@ class OCRActions:
             ActionResult with extracted text or error
         """
         logger.info(f"Extracting text using Windows OCR (region={region})")
-        
+
         if not WINDOWS_OCR_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="windows_ocr_from_screen",
                 message="Windows OCR API not available",
-                error="Windows OCR API only available on Windows"
+                error="Windows OCR API only available on Windows",
             )
 
         if self.dry_run:
@@ -321,7 +329,7 @@ class OCRActions:
                 success=True,
                 action_type="windows_ocr_from_screen",
                 message=f"[DRY-RUN] Would extract text using Windows OCR (region={region})",
-                data={"region": region, "dry_run": True}
+                data={"region": region, "dry_run": True},
             )
 
         # Note: Windows OCR API implementation would require more complex COM interface
@@ -333,5 +341,5 @@ class OCRActions:
                 success=False,
                 action_type="windows_ocr_from_screen",
                 message="Windows OCR not implemented and pytesseract not available",
-                error="Install pytesseract for OCR functionality"
+                error="Install pytesseract for OCR functionality",
             )

@@ -12,7 +12,6 @@ from typing import Any, Dict, Generator, List, Optional
 
 from jarvis.config import JarvisConfig
 from jarvis.controller import Controller
-from jarvis.memory import MemoryStore
 from jarvis.orchestrator import Orchestrator
 from jarvis.reasoning import Plan, ReasoningModule
 
@@ -186,7 +185,36 @@ class ChatSession:
             lines.append(f"Message: {result['message']}")
 
         if result.get("data"):
-            lines.append(f"Data: {result['data']}")
+            import json
+
+            try:
+                data_str = json.dumps(result["data"], indent=2)
+                lines.append(f"Data:\n{data_str}")
+            except (TypeError, ValueError):
+                lines.append(f"Data: {result['data']}")
+
+        if result.get("plan_execution"):
+            execution = result["plan_execution"]
+            lines.append("\nExecution Summary:")
+            lines.append(f"  Total Steps: {execution.get('total_steps', 0)}")
+            lines.append(f"  Successful: {execution.get('successful_steps', 0)}")
+            lines.append(f"  Status: {execution.get('status', 'unknown')}")
+
+            if execution.get("results"):
+                lines.append("\nStep Results:")
+                for step_result in execution["results"]:
+                    step_num = step_result.get("step_number", "?")
+                    success = "✓" if step_result.get("success", False) else "✗"
+                    msg = step_result.get("message", "No message")
+                    lines.append(f"  {success} Step {step_num}: {msg}")
+
+                    if step_result.get("data"):
+                        try:
+                            data_str = json.dumps(step_result["data"], indent=4)
+                            for line in data_str.split("\n"):
+                                lines.append(f"    {line}")
+                        except (TypeError, ValueError):
+                            lines.append(f"    Data: {step_result['data']}")
 
         return "\n".join(lines) if lines else "No result information available."
 
@@ -213,7 +241,7 @@ class ChatSession:
             response_lines.append(self._format_plan(plan))
 
         if result:
-            response_lines.append(f"\n✓ Execution Result:")
+            response_lines.append("\n✓ Execution Result:")
             response_lines.append(self._format_result(result))
 
         if not plan and not result:
@@ -251,7 +279,11 @@ class ChatSession:
             result = self.orchestrator.handle_command(user_input)
 
             # If we have a plan and system action router, try to execute it
-            if plan and hasattr(self.orchestrator, 'system_action_router') and self.orchestrator.system_action_router:
+            if (
+                plan
+                and hasattr(self.orchestrator, "system_action_router")
+                and self.orchestrator.system_action_router
+            ):
                 try:
                     logger.debug("Executing plan through system action router")
                     execution_result = self.orchestrator.execute_plan(plan)
@@ -296,7 +328,7 @@ class ChatSession:
         self.add_message("user", user_input, metadata={"context": context})
 
         full_response_parts = []
-        
+
         try:
             # If controller is available, use the dual-model stack
             if self.controller:
@@ -306,26 +338,30 @@ class ChatSession:
                     for chunk in self.controller.process_command_stream(user_input):
                         yield chunk
                         full_response_parts.append(chunk)
-                    
+
                     # The generator returns the ControllerResult
                     full_response = "".join(full_response_parts)
-                    
+
                     # Extract metadata from controller
                     metadata = {}
                     if controller_result:
-                        metadata["controller_result"] = controller_result.to_dict() if hasattr(controller_result, "to_dict") else None
-                    
+                        metadata["controller_result"] = (
+                            controller_result.to_dict()
+                            if hasattr(controller_result, "to_dict")
+                            else None
+                        )
+
                     self.add_message(
                         "assistant",
                         full_response,
                         metadata=metadata,
                     )
                     return
-                    
+
                 except Exception as e:
                     logger.exception(f"Error using controller: {e}")
                     logger.info("Falling back to non-controller processing")
-            
+
             # Fallback: use orchestrator + reasoning module
             plan = None
             plan_text = ""
@@ -343,9 +379,9 @@ class ChatSession:
 
             yield "[Executing...]\n"
             full_response_parts.append("[Executing...]\n")
-            
+
             result = self.orchestrator.handle_command(user_input)
-            
+
             if result:
                 result_text = self._format_result(result)
                 yield "\n✓ Execution Result:\n"

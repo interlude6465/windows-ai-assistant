@@ -6,13 +6,19 @@ dry-run semantics and safety checks.
 """
 
 import logging
+import os
 import tempfile
 from typing import Optional, Tuple
 
 try:
+    # Prevent mouseinfo from failing in headless environments
+    if not os.environ.get("DISPLAY"):
+        os.environ["DISPLAY"] = ":0"
+
     import pyautogui
+
     PYAUTOGUI_AVAILABLE = True
-except ImportError:
+except (ImportError, KeyError, Exception):
     PYAUTOGUI_AVAILABLE = False
 
 from jarvis.action_executor import ActionResult
@@ -49,14 +55,14 @@ class GUIControlActions:
             ActionResult with screen dimensions
         """
         logger.info("Getting screen size")
-        
+
         if not PYAUTOGUI_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="get_screen_size",
                 message="pyautogui not available",
                 error="Install pyautogui to use GUI control features",
-                execution_time_ms=0.0
+                execution_time_ms=0.0,
             )
 
         try:
@@ -65,7 +71,7 @@ class GUIControlActions:
                 success=True,
                 action_type="get_screen_size",
                 message=f"Screen size: {width}x{height}",
-                data={"width": width, "height": height}
+                data={"width": width, "height": height},
             )
         except Exception as e:
             logger.error(f"Error getting screen size: {e}")
@@ -73,12 +79,10 @@ class GUIControlActions:
                 success=False,
                 action_type="get_screen_size",
                 message="Failed to get screen size",
-                error=str(e)
+                error=str(e),
             )
 
-    def capture_screen(
-        self, region: Optional[Tuple[int, int, int, int]] = None
-    ) -> ActionResult:
+    def capture_screen(self, region: Optional[Tuple[int, int, int, int]] = None) -> ActionResult:
         """
         Capture a screenshot of the screen or region.
 
@@ -89,13 +93,13 @@ class GUIControlActions:
             ActionResult with screenshot information
         """
         logger.info(f"Capturing screen (region={region})")
-        
+
         if not PYAUTOGUI_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="capture_screen",
                 message="pyautogui not available",
-                error="Install pyautogui to use GUI control features"
+                error="Install pyautogui to use GUI control features",
             )
 
         if self.dry_run:
@@ -103,7 +107,7 @@ class GUIControlActions:
                 success=True,
                 action_type="capture_screen",
                 message=f"[DRY-RUN] Would capture screen (region={region})",
-                data={"region": region, "dry_run": True}
+                data={"region": region, "dry_run": True},
             )
 
         try:
@@ -113,12 +117,12 @@ class GUIControlActions:
                 else:
                     screenshot = pyautogui.screenshot()
                 screenshot.save(tmp.name)
-                
+
                 return ActionResult(
                     success=True,
                     action_type="capture_screen",
                     message=f"Screenshot saved to {tmp.name}",
-                    data={"screenshot_path": tmp.name, "region": region, "size": screenshot.size}
+                    data={"screenshot_path": tmp.name, "region": region, "size": screenshot.size},
                 )
         except Exception as e:
             logger.error(f"Error capturing screen: {e}")
@@ -126,7 +130,7 @@ class GUIControlActions:
                 success=False,
                 action_type="capture_screen",
                 message="Failed to capture screen",
-                error=str(e)
+                error=str(e),
             )
 
     def move_mouse(self, x: int, y: int, duration: float = 0.5) -> ActionResult:
@@ -142,13 +146,13 @@ class GUIControlActions:
             ActionResult indicating success or failure
         """
         logger.info(f"Moving mouse to ({x}, {y})")
-        
+
         if not PYAUTOGUI_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="move_mouse",
                 message="pyautogui not available",
-                error="Install pyautogui to use GUI control features"
+                error="Install pyautogui to use GUI control features",
             )
 
         if self.dry_run:
@@ -156,7 +160,7 @@ class GUIControlActions:
                 success=True,
                 action_type="move_mouse",
                 message=f"[DRY-RUN] Would move mouse to ({x}, {y})",
-                data={"x": x, "y": y, "duration": duration, "dry_run": True}
+                data={"x": x, "y": y, "duration": duration, "dry_run": True},
             )
 
         try:
@@ -165,7 +169,7 @@ class GUIControlActions:
                 success=True,
                 action_type="move_mouse",
                 message=f"Moved mouse to ({x}, {y})",
-                data={"x": x, "y": y, "duration": duration}
+                data={"x": x, "y": y, "duration": duration},
             )
         except Exception as e:
             logger.error(f"Error moving mouse: {e}")
@@ -173,7 +177,7 @@ class GUIControlActions:
                 success=False,
                 action_type="move_mouse",
                 message="Failed to move mouse",
-                error=str(e)
+                error=str(e),
             )
 
     def click_mouse(
@@ -181,7 +185,7 @@ class GUIControlActions:
         x: Optional[int] = None,
         y: Optional[int] = None,
         button: str = "left",
-        clicks: int = 1
+        clicks: int = 1,
     ) -> ActionResult:
         """
         Click the mouse at specified coordinates or current position.
@@ -196,13 +200,13 @@ class GUIControlActions:
             ActionResult indicating success or failure
         """
         logger.info(f"Clicking mouse ({button} button, {clicks} clicks)")
-        
+
         if not PYAUTOGUI_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="click_mouse",
                 message="pyautogui not available",
-                error="Install pyautogui to use GUI control features"
+                error="Install pyautogui to use GUI control features",
             )
 
         if self.dry_run:
@@ -211,7 +215,7 @@ class GUIControlActions:
                 success=True,
                 action_type="click_mouse",
                 message=f"[DRY-RUN] Would click {button} button {clicks} times at {pos}",
-                data={"x": x, "y": y, "button": button, "clicks": clicks, "dry_run": True}
+                data={"x": x, "y": y, "button": button, "clicks": clicks, "dry_run": True},
             )
 
         try:
@@ -219,12 +223,12 @@ class GUIControlActions:
                 pyautogui.click(x, y, clicks=clicks, button=button)
             else:
                 pyautogui.click(clicks=clicks, button=button)
-            
+
             return ActionResult(
                 success=True,
                 action_type="click_mouse",
                 message=f"Clicked {button} button {clicks} times",
-                data={"x": x, "y": y, "button": button, "clicks": clicks}
+                data={"x": x, "y": y, "button": button, "clicks": clicks},
             )
         except Exception as e:
             logger.error(f"Error clicking mouse: {e}")
@@ -232,7 +236,7 @@ class GUIControlActions:
                 success=False,
                 action_type="click_mouse",
                 message="Failed to click mouse",
-                error=str(e)
+                error=str(e),
             )
 
     def get_mouse_position(self) -> ActionResult:
@@ -243,13 +247,13 @@ class GUIControlActions:
             ActionResult with mouse coordinates
         """
         logger.info("Getting mouse position")
-        
+
         if not PYAUTOGUI_AVAILABLE:
             return ActionResult(
                 success=False,
                 action_type="get_mouse_position",
                 message="pyautogui not available",
-                error="Install pyautogui to use GUI control features"
+                error="Install pyautogui to use GUI control features",
             )
 
         try:
@@ -258,7 +262,7 @@ class GUIControlActions:
                 success=True,
                 action_type="get_mouse_position",
                 message=f"Mouse position: ({x}, {y})",
-                data={"x": x, "y": y}
+                data={"x": x, "y": y},
             )
         except Exception as e:
             logger.error(f"Error getting mouse position: {e}")
@@ -266,5 +270,5 @@ class GUIControlActions:
                 success=False,
                 action_type="get_mouse_position",
                 message="Failed to get mouse position",
-                error=str(e)
+                error=str(e),
             )
