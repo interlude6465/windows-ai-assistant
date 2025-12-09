@@ -1,7 +1,7 @@
 import logging
 from unittest.mock import MagicMock
 
-import pytest  # type: ignore
+import pytest
 
 from jarvis.config import JarvisConfig
 from jarvis.reasoning import PlanningResponseError, ReasoningModule
