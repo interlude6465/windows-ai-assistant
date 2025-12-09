@@ -1,7 +1,7 @@
 """Tests for the controller module."""
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,7 +16,7 @@ from jarvis.controller import (
 )
 from jarvis.controller.brain_server import BrainServer
 from jarvis.memory import MemoryStore
-from jarvis.reasoning import Plan, PlanStep, PlanValidationResult, ReasoningModule
+from jarvis.reasoning import Plan, PlanStep, ReasoningModule
 
 
 class TestBrainServer:
@@ -34,7 +34,7 @@ class TestBrainServer:
                 PlanStep(
                     step_number=1,
                     description="First step",
-                    required_tools=[],
+                    required_tools=["subprocess_execute"],
                     dependencies=[],
                     safety_flags=[],
                 )
@@ -54,7 +54,7 @@ class TestBrainServer:
         """Test BrainServer plan generation."""
         server = BrainServer(mock_reasoning_module)
         plan = server.plan("test command")
-        
+
         assert plan.plan_id == "test-plan-1"
         assert plan.description == "Test plan"
         assert len(plan.steps) == 1
@@ -63,15 +63,13 @@ class TestBrainServer:
     def test_brain_server_plan_stream(self, mock_reasoning_module: MagicMock) -> None:
         """Test BrainServer plan streaming."""
         server = BrainServer(mock_reasoning_module)
-        
+
         chunks = []
-        result = None
-        
+
         gen = server.plan_stream("test command")
         for chunk in gen:
             chunks.append(chunk)
-        result = next(gen, None)
-        
+
         # Should have multiple chunks of output
         assert len(chunks) > 0
         assert any("Planning" in chunk for chunk in chunks)
@@ -107,16 +105,16 @@ class TestExecutorServer:
     def test_executor_server_execute_step(self, mock_action_executor: MagicMock) -> None:
         """Test ExecutorServer execute step."""
         server = ExecutorServer(mock_action_executor)
-        
+
         step = PlanStep(
             step_number=1,
             description="List files in current directory",
-            required_tools=[],
+            required_tools=["file_list"],
             dependencies=[],
         )
-        
+
         result = server.execute_step(step)
-        
+
         assert result["success"] is True
         assert result["action_type"] == "test"
         assert result["message"] == "Action completed"
@@ -126,38 +124,38 @@ class TestExecutorServer:
     ) -> None:
         """Test ExecutorServer execute step with context."""
         server = ExecutorServer(mock_action_executor)
-        
+
         step = PlanStep(
             step_number=1,
             description="Create file",
-            required_tools=[],
+            required_tools=["file_create"],
             dependencies=[],
         )
-        
+
         context = {"file_path": "/tmp/test.txt", "content": "test"}
         result = server.execute_step(step, context)
-        
+
         assert result["success"] is True
 
     def test_executor_server_execute_step_stream(self, mock_action_executor: MagicMock) -> None:
         """Test ExecutorServer execute step with streaming."""
         server = ExecutorServer(mock_action_executor)
-        
+
         step = PlanStep(
             step_number=1,
             description="List files",
-            required_tools=[],
+            required_tools=["file_list"],
             dependencies=[],
         )
-        
+
         chunks = []
         result_dict = {}
-        
+
         gen = server.execute_step_stream(step)
         for chunk in gen:
             chunks.append(chunk)
         result_dict = next(gen, {})
-        
+
         assert len(chunks) > 0
         assert any("Executing" in chunk for chunk in chunks)
 
@@ -190,26 +188,26 @@ class TestPlanner:
         """Test Planner plan generation."""
         planner = Planner(mock_brain_server)
         plan = planner.plan("test command")
-        
+
         assert plan.plan_id == "test-plan-1"
         mock_brain_server.plan.assert_called_once()
 
     def test_planner_plan_stream(self, mock_brain_server: MagicMock) -> None:
         """Test Planner plan streaming."""
         planner = Planner(mock_brain_server)
-        
+
         chunks = []
         gen = planner.plan_stream("test command")
         for chunk in gen:
             chunks.append(chunk)
-        
+
         assert len(chunks) > 0
 
     def test_planner_enrich_prompt_without_memory(self, mock_brain_server: MagicMock) -> None:
         """Test prompt enrichment without memory store."""
         planner = Planner(mock_brain_server, memory_store=None)
         enriched = planner._enrich_prompt("test input")
-        
+
         # Should return original input when no memory store
         assert enriched == "test input"
 
@@ -217,10 +215,10 @@ class TestPlanner:
         """Test prompt enrichment with memory store."""
         memory_store = MagicMock(spec=MemoryStore)
         memory_store.search_capabilities.return_value = []
-        
+
         planner = Planner(mock_brain_server, memory_store=memory_store)
         enriched = planner._enrich_prompt("test input")
-        
+
         # Should return original input when no tools found
         assert enriched == "test input"
 
@@ -259,10 +257,10 @@ class TestDispatcher:
             message="Success",
             data={"key": "value"},
         )
-        
+
         assert outcome.step_number == 1
         assert outcome.success is True
-        
+
         outcome_dict = outcome.to_dict()
         assert outcome_dict["step_number"] == 1
         assert outcome_dict["success"] is True
@@ -270,7 +268,7 @@ class TestDispatcher:
     def test_dispatcher_dispatch_single_step(self, mock_executor_server: MagicMock) -> None:
         """Test Dispatcher dispatch with single step."""
         dispatcher = Dispatcher(mock_executor_server)
-        
+
         plan = Plan(
             plan_id="test-plan-1",
             user_input="test command",
@@ -279,16 +277,16 @@ class TestDispatcher:
                 PlanStep(
                     step_number=1,
                     description="Test step",
-                    required_tools=[],
+                    required_tools=["subprocess_execute"],
                     dependencies=[],
                 )
             ],
             is_safe=True,
             generated_at=datetime.now().isoformat(),
         )
-        
+
         outcomes = dispatcher.dispatch(plan)
-        
+
         assert len(outcomes) == 1
         assert outcomes[0].step_number == 1
         assert outcomes[0].success is True
@@ -296,7 +294,7 @@ class TestDispatcher:
     def test_dispatcher_dispatch_multiple_steps(self, mock_executor_server: MagicMock) -> None:
         """Test Dispatcher dispatch with multiple steps."""
         dispatcher = Dispatcher(mock_executor_server)
-        
+
         plan = Plan(
             plan_id="test-plan-1",
             user_input="test command",
@@ -305,29 +303,29 @@ class TestDispatcher:
                 PlanStep(
                     step_number=1,
                     description="First step",
-                    required_tools=[],
+                    required_tools=["file_list"],
                     dependencies=[],
                 ),
                 PlanStep(
                     step_number=2,
                     description="Second step",
-                    required_tools=[],
+                    required_tools=["subprocess_execute"],
                     dependencies=[1],
                 ),
             ],
             is_safe=True,
             generated_at=datetime.now().isoformat(),
         )
-        
+
         outcomes = dispatcher.dispatch(plan)
-        
+
         assert len(outcomes) == 2
         assert all(o.success for o in outcomes)
 
     def test_dispatcher_dispatch_stream(self, mock_executor_server: MagicMock) -> None:
         """Test Dispatcher dispatch with streaming."""
         dispatcher = Dispatcher(mock_executor_server)
-        
+
         plan = Plan(
             plan_id="test-plan-1",
             user_input="test command",
@@ -336,33 +334,33 @@ class TestDispatcher:
                 PlanStep(
                     step_number=1,
                     description="Test step",
-                    required_tools=[],
+                    required_tools=["subprocess_execute"],
                     dependencies=[],
                 )
             ],
             is_safe=True,
             generated_at=datetime.now().isoformat(),
         )
-        
+
         chunks = []
         gen = dispatcher.dispatch_stream(plan)
         for chunk in gen:
             chunks.append(chunk)
-        
+
         # Should have output from streaming
         assert len(chunks) > 0
 
     def test_dispatcher_step_callbacks(self, mock_executor_server: MagicMock) -> None:
         """Test Dispatcher step event callbacks."""
         dispatcher = Dispatcher(mock_executor_server)
-        
+
         callback_results = []
-        
+
         def test_callback(outcome: StepOutcome) -> None:
             callback_results.append(outcome)
-        
+
         dispatcher.subscribe_to_step_events(test_callback)
-        
+
         plan = Plan(
             plan_id="test-plan-1",
             user_input="test command",
@@ -371,22 +369,22 @@ class TestDispatcher:
                 PlanStep(
                     step_number=1,
                     description="Test step",
-                    required_tools=[],
+                    required_tools=["subprocess_execute"],
                     dependencies=[],
                 )
             ],
             is_safe=True,
             generated_at=datetime.now().isoformat(),
         )
-        
+
         dispatcher.dispatch(plan)
-        
+
         assert len(callback_results) == 1
 
     def test_dispatcher_get_summary(self, mock_executor_server: MagicMock) -> None:
         """Test Dispatcher execution summary."""
         dispatcher = Dispatcher(mock_executor_server)
-        
+
         plan = Plan(
             plan_id="test-plan-1",
             user_input="test command",
@@ -395,17 +393,17 @@ class TestDispatcher:
                 PlanStep(
                     step_number=1,
                     description="Test step",
-                    required_tools=[],
+                    required_tools=["subprocess_execute"],
                     dependencies=[],
                 )
             ],
             is_safe=True,
             generated_at=datetime.now().isoformat(),
         )
-        
+
         dispatcher.dispatch(plan)
         summary = dispatcher.get_summary()
-        
+
         assert summary["total_steps"] == 1
         assert summary["successful"] == 1
         assert summary["failed"] == 0
@@ -426,7 +424,7 @@ class TestController:
                 PlanStep(
                     step_number=1,
                     description="First step",
-                    required_tools=[],
+                    required_tools=["subprocess_execute"],
                     dependencies=[],
                 )
             ],
@@ -457,7 +455,7 @@ class TestController:
     ) -> None:
         """Test Controller initialization."""
         controller = Controller(mock_reasoning_module, mock_action_executor)
-        
+
         assert controller.planner is not None
         assert controller.dispatcher is not None
         assert controller.brain_server is not None
@@ -468,9 +466,9 @@ class TestController:
     ) -> None:
         """Test Controller process command."""
         controller = Controller(mock_reasoning_module, mock_action_executor)
-        
+
         result = controller.process_command("test command")
-        
+
         assert isinstance(result, ControllerResult)
         assert result.plan is not None
         assert result.plan.plan_id == "test-plan-1"
@@ -480,15 +478,15 @@ class TestController:
     ) -> None:
         """Test Controller process command with streaming."""
         controller = Controller(mock_reasoning_module, mock_action_executor)
-        
+
         chunks = []
         result = None
-        
+
         gen = controller.process_command_stream("test command")
         for chunk in gen:
             chunks.append(chunk)
         result = next(gen, None)
-        
+
         # Should have output
         assert len(chunks) > 0
 
@@ -500,11 +498,11 @@ class TestController:
         """Test Controller with memory store."""
         memory_store = MagicMock(spec=MemoryStore)
         memory_store.search_capabilities.return_value = []
-        
+
         controller = Controller(
             mock_reasoning_module, mock_action_executor, memory_store=memory_store
         )
-        
+
         result = controller.process_command("test command")
         assert result.plan is not None
 
@@ -513,18 +511,18 @@ class TestController:
     ) -> None:
         """Test Controller event subscriptions."""
         controller = Controller(mock_reasoning_module, mock_action_executor)
-        
+
         callback_called = []
-        
+
         def callback(outcome: StepOutcome) -> None:
             callback_called.append(outcome)
-        
+
         controller.subscribe_to_step_events(callback)
-        
+
         result = controller.process_command("test command")
-        
+
         controller.unsubscribe_from_step_events(callback)
-        
+
         assert len(controller.get_last_outcomes()) >= 0
 
     def test_controller_result_to_dict(
@@ -539,10 +537,10 @@ class TestController:
             is_safe=True,
             generated_at=datetime.now().isoformat(),
         )
-        
+
         result = ControllerResult(success=True, plan=plan, step_outcomes=[])
         result_dict = result.to_dict()
-        
+
         assert result_dict["success"] is True
         assert result_dict["plan"]["plan_id"] == "test-plan-1"
 

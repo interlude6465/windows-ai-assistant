@@ -127,6 +127,7 @@ class ReasoningModule:
         config: JarvisConfig,
         llm_client: LLMClient,
         rag_service: Optional[Any] = None,
+        available_tools: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> None:
         """
         Initialize reasoning module.
@@ -135,12 +136,80 @@ class ReasoningModule:
             config: Application configuration
             llm_client: LLM client for plan generation
             rag_service: Optional RAG memory service for contextual knowledge
+            available_tools: Optional dict of available tools by category
         """
         self.config = config
         self.llm_client = llm_client
         self.rag_service = rag_service
+        self.available_tools = available_tools or self._get_default_tools()
         self._plan_counter = 0
-        logger.info("ReasoningModule initialized")
+        logger.info("ReasoningModule initialized with %d available tools", self._count_tools())
+
+    def _count_tools(self) -> int:
+        """Count total number of available tools."""
+        return sum(len(tools) for tools in self.available_tools.values())
+
+    def _get_default_tools(self) -> Dict[str, Dict[str, str]]:
+        """Get default static mapping of available tools."""
+        return {
+            "file": {
+                "file_list": "List files in directory",
+                "file_create": "Create a file",
+                "file_delete": "Delete a file",
+                "file_delete_directory": "Delete a directory",
+                "file_move": "Move/rename a file",
+                "file_copy": "Copy a file",
+                "file_get_info": "Get file information",
+            },
+            "gui": {
+                "gui_get_screen_size": "Get screen dimensions",
+                "gui_capture_screen": "Capture screenshot",
+                "gui_move_mouse": "Move mouse cursor",
+                "gui_click_mouse": "Click mouse button",
+                "gui_get_mouse_position": "Get mouse position",
+            },
+            "typing": {
+                "typing_type_text": "Type text",
+                "typing_press_key": "Press keyboard key",
+                "typing_hotkey": "Press key combination",
+                "typing_copy_to_clipboard": "Copy text to clipboard",
+                "typing_paste_from_clipboard": "Paste from clipboard",
+                "typing_get_clipboard_content": "Get clipboard content",
+            },
+            "registry": {
+                "registry_list_subkeys": "List registry subkeys",
+                "registry_list_values": "List registry values",
+                "registry_read_value": "Read registry value",
+                "registry_write_value": "Write registry value",
+                "registry_delete_value": "Delete registry value",
+            },
+            "ocr": {
+                "ocr_extract_from_image": "Extract text from image",
+                "ocr_extract_from_screen": "Extract text from screen",
+                "ocr_extract_with_boxes": "Extract text with bounding boxes",
+                "ocr_get_available_languages": "Get available OCR languages",
+                "ocr_windows_from_screen": "Windows OCR from screen",
+            },
+            "powershell": {
+                "powershell_execute": "Execute PowerShell command",
+                "powershell_execute_script": "Execute PowerShell script",
+                "powershell_get_system_info": "Get system information",
+                "powershell_get_processes": "Get running processes",
+                "powershell_get_services": "Get services",
+                "powershell_get_programs": "Get installed programs",
+                "powershell_check_file_hash": "Calculate file hash",
+            },
+            "subprocess": {
+                "subprocess_execute": "Execute system command",
+                "subprocess_open_application": "Open application",
+                "subprocess_ping": "Ping host",
+                "subprocess_get_network": "Get network interfaces",
+                "subprocess_get_disk_usage": "Get disk usage",
+                "subprocess_get_environment": "Get environment variables",
+                "subprocess_kill_process": "Kill process",
+                "subprocess_list_processes": "List processes",
+            },
+        }
 
     def plan_actions(self, user_input: str) -> Plan:
         """
@@ -266,22 +335,29 @@ class ReasoningModule:
         Returns:
             Formatted prompt for LLM, enriched with relevant knowledge if RAG available
         """
+        tools_section = self._format_available_tools()
+
         base_prompt = f"""
 Generate a detailed execution plan for the following request.
 Break it down into clear, sequential steps.
 
 Request: {user_input}
 
+{tools_section}
+
 Respond with valid JSON containing:
 - description: High-level summary of the plan
 - steps: Array of steps, each with:
   - step_number: Sequential number starting from 1
-  - description: What to do in this step
-  - required_tools: Array of tool names needed
+  - description: What to do in this step (use action verbs, e.g., "Use file_create to...")
+  - required_tools: Array of concrete tool names needed (from the available tools list above)
   - dependencies: Array of step numbers this step depends on
   - safety_flags: Array of safety concerns (use: destructive, network_access,
     file_modification, system_command, external_dependency)
   - estimated_duration: Estimated time (e.g., "5 minutes")
+
+IMPORTANT: Every step MUST have at least one required_tool from the available tools list.
+Never return empty required_tools arrays.
 
 Ensure:
 1. Steps are in logical order
@@ -289,6 +365,7 @@ Ensure:
 3. No circular dependencies
 4. Each step is focused on a single task
 5. Safety flags are appropriately set
+6. Every step references specific tools that will perform the action
 
 Return only valid JSON, no other text.
 """
@@ -309,6 +386,28 @@ Return only valid JSON, no other text.
                 return base_prompt
 
         return base_prompt
+
+    def _format_available_tools(self) -> str:
+        """
+        Format available tools for inclusion in the prompt.
+
+        Returns:
+            Formatted string describing available tools
+        """
+        tools_text = "Available Tools by Category:\n"
+
+        for category, tools in self.available_tools.items():
+            tools_text += f"\n{category.upper()}:\n"
+            for tool_name, tool_desc in tools.items():
+                tools_text += f"  - {tool_name}: {tool_desc}\n"
+
+        tools_text += "\nExamples of required_tools usage:\n"
+        tools_text += "  - For file operations: ['file_create'], ['file_list', 'file_delete']\n"
+        tools_text += "  - For GUI operations: ['gui_click_mouse'], ['gui_capture_screen']\n"
+        tools_text += "  - For commands: ['subprocess_execute'], ['powershell_execute']\n"
+        tools_text += "  - For application launch: ['subprocess_open_application']\n"
+
+        return tools_text
 
     def _parse_planning_response(self, response_text: str) -> Dict[str, Any]:
         """
@@ -413,10 +512,15 @@ Return only valid JSON, no other text.
         """
         steps_data = response.get("steps", [])
 
-        logger.debug(f"Attempting to parse steps. steps_data type: {type(steps_data)}, length: {len(steps_data) if isinstance(steps_data, (list, dict)) else 'N/A'}")
+        logger.debug(
+            f"Attempting to parse steps. steps_data type: {type(steps_data)}, "
+            f"length: {len(steps_data) if isinstance(steps_data, (list, dict)) else 'N/A'}"
+        )
 
         if not steps_data:
-            logger.warning(f"LLM did not provide steps (steps_data={steps_data}), generating fallback plan")
+            logger.warning(
+                f"LLM did not provide steps (steps_data={steps_data}), generating fallback plan"
+            )
             logger.debug(f"Full response was: {response}")
             return self._generate_fallback_plan(user_input)
 
@@ -458,44 +562,318 @@ Return only valid JSON, no other text.
                 continue
 
         if not steps:
-            logger.warning(f"Failed to parse any steps from {len(steps_data)} step entries, using fallback")
+            logger.warning(
+                f"Failed to parse any steps from {len(steps_data)} step entries, using fallback"
+            )
             steps = self._generate_fallback_plan(user_input)
 
+        steps = self._post_process_steps(steps, user_input)
         return steps
 
     def _generate_fallback_plan(self, user_input: str) -> List[PlanStep]:
         """
         Generate a fallback plan when LLM parsing fails.
 
+        Infers intent keywords from user_input and populates concrete tool-driven steps.
+
         Args:
             user_input: Original user input
 
         Returns:
-            List of basic PlanStep objects
+            List of PlanStep objects with concrete tool references
         """
-        return [
+        steps: List[PlanStep] = []
+        inferred_tools = self._infer_tools_from_input(user_input)
+
+        step_number = 1
+
+        if inferred_tools:
+            for tool_name in inferred_tools[:3]:
+                steps.append(
+                    PlanStep(
+                        step_number=step_number,
+                        description=f"Use {tool_name} to "
+                        f"{self._generate_action_description(user_input, tool_name)}",
+                        required_tools=[tool_name],
+                        dependencies=[step_number - 1] if step_number > 1 else [],
+                        safety_flags=self._infer_safety_flags(tool_name),
+                    )
+                )
+                step_number += 1
+        else:
+            steps.append(
+                PlanStep(
+                    step_number=step_number,
+                    description=f"Use subprocess_execute to "
+                    f"{self._generate_action_description(user_input, 'subprocess_execute')}",
+                    required_tools=["subprocess_execute"],
+                    dependencies=[],
+                    safety_flags=[SafetyFlag.SYSTEM_COMMAND],
+                )
+            )
+            step_number += 1
+
+        steps.append(
             PlanStep(
-                step_number=1,
-                description=f"Initialize: {user_input}",
-                required_tools=[],
-                dependencies=[],
+                step_number=step_number,
+                description=f"Verify that the action completed successfully: {user_input}",
+                required_tools=["powershell_get_system_info"],
+                dependencies=[step_number - 1],
                 safety_flags=[],
-            ),
-            PlanStep(
-                step_number=2,
-                description="Execute requested action",
-                required_tools=[],
-                dependencies=[1],
-                safety_flags=[],
-            ),
-            PlanStep(
-                step_number=3,
-                description="Verify completion",
-                required_tools=[],
-                dependencies=[2],
-                safety_flags=[],
-            ),
-        ]
+            )
+        )
+
+        logger.info(
+            f"Generated fallback plan with {len(steps)} tool-driven steps for: {user_input}"
+        )
+        return steps
+
+    def _infer_tools_from_input(self, user_input: str) -> List[str]:
+        """
+        Infer concrete tool names from user input keywords.
+
+        Args:
+            user_input: User input text
+
+        Returns:
+            List of inferred tool names
+        """
+        input_lower = user_input.lower()
+        inferred = []
+
+        keyword_tool_map = {
+            ("create", "file"): "file_create",
+            ("create", "folder"): "file_create",
+            ("create", "directory"): "file_create",
+            ("list", "file"): "file_list",
+            ("list", "directory"): "file_list",
+            ("delete", "file"): "file_delete",
+            ("remove", "file"): "file_delete",
+            ("delete", "folder"): "file_delete_directory",
+            ("move", "file"): "file_move",
+            ("copy", "file"): "file_copy",
+            ("open", "notepad"): "subprocess_open_application",
+            ("open", "explorer"): "subprocess_open_application",
+            ("open", "calculator"): "subprocess_open_application",
+            ("launch", "application"): "subprocess_open_application",
+            ("launch", "calculator"): "subprocess_open_application",
+            ("start", "application"): "subprocess_open_application",
+            ("start", "application"): "subprocess_open_application",
+            ("screenshot", ""): "gui_capture_screen",
+            ("capture", "screen"): "gui_capture_screen",
+            ("click", "mouse"): "gui_click_mouse",
+            ("move", "mouse"): "gui_move_mouse",
+            ("type", "text"): "typing_type_text",
+            ("execute", "command"): "subprocess_execute",
+            ("run", "command"): "subprocess_execute",
+            ("powershell", ""): "powershell_execute",
+            ("get", "system"): "powershell_get_system_info",
+            ("system", "info"): "powershell_get_system_info",
+            ("process", "list"): "subprocess_list_processes",
+            ("ocr", "text"): "ocr_extract_from_image",
+            ("extract", "text"): "ocr_extract_from_image",
+            ("registry", "read"): "registry_read_value",
+            ("registry", "write"): "registry_write_value",
+        }
+
+        for (keyword1, keyword2), tool in keyword_tool_map.items():
+            if keyword1 in input_lower and (not keyword2 or keyword2 in input_lower):
+                if tool not in inferred:
+                    inferred.append(tool)
+
+        return inferred
+
+    def _get_tool_description(self, tool_name: str) -> str:
+        """Get description for a tool."""
+        for category_tools in self.available_tools.values():
+            if tool_name in category_tools:
+                return category_tools[tool_name]
+        return "execute action"
+
+    def _generate_action_description(self, user_input: str, tool_name: str) -> str:
+        """Generate a command-style description for a tool action."""
+        verb_map = {
+            "file_create": "create or prepare the file",
+            "file_list": "list files in the directory",
+            "file_delete": "delete the file",
+            "file_delete_directory": "delete the directory",
+            "file_move": "move or rename the file",
+            "file_copy": "copy the file",
+            "subprocess_open_application": "open the application",
+            "subprocess_execute": "execute the command",
+            "gui_capture_screen": "capture the screen",
+            "gui_click_mouse": "click at the target location",
+            "gui_move_mouse": "move the mouse cursor",
+            "typing_type_text": "type the text",
+            "powershell_execute": "execute the PowerShell command",
+            "powershell_get_system_info": "retrieve system information",
+            "subprocess_list_processes": "list running processes",
+            "ocr_extract_from_image": "extract text from the image",
+            "registry_read_value": "read the registry value",
+            "registry_write_value": "write the registry value",
+        }
+
+        return verb_map.get(tool_name, f"perform action: {user_input[:50]}")
+
+    def _infer_safety_flags(self, tool_name: str) -> List[SafetyFlag]:
+        """Infer safety flags based on tool type."""
+        flags = []
+
+        if tool_name.startswith("file_delete"):
+            flags.append(SafetyFlag.DESTRUCTIVE)
+            flags.append(SafetyFlag.FILE_MODIFICATION)
+        elif tool_name.startswith("file_") and tool_name not in ["file_list", "file_get_info"]:
+            flags.append(SafetyFlag.FILE_MODIFICATION)
+        elif tool_name.startswith("subprocess_") or tool_name.startswith("powershell_"):
+            flags.append(SafetyFlag.SYSTEM_COMMAND)
+        elif tool_name.startswith("registry_"):
+            flags.append(SafetyFlag.DESTRUCTIVE)
+            flags.append(SafetyFlag.SYSTEM_COMMAND)
+
+        return flags
+
+    def _post_process_steps(self, steps: List[PlanStep], user_input: str) -> List[PlanStep]:
+        """
+        Post-process steps to validate and inject tool metadata.
+
+        Validates required_tools, injects missing assignments via keyword heuristics,
+        and rewrites vague descriptions into command-style text.
+
+        Args:
+            steps: List of parsed steps
+            user_input: Original user input (for context)
+
+        Returns:
+            List of post-processed steps with enforced tool metadata
+        """
+        processed_steps: List[PlanStep] = []
+
+        for step in steps:
+            processed_step = step
+
+            if not step.required_tools or len(step.required_tools) == 0:
+                logger.info(
+                    f"Step {step.step_number} has no required_tools, "
+                    f"attempting to inject via heuristics"
+                )
+                inferred_tools = self._infer_tools_from_description(step.description, user_input)
+                if inferred_tools:
+                    logger.info(
+                        f"Step {step.step_number}: injected tools {inferred_tools} "
+                        f"from description"
+                    )
+                    processed_step.required_tools = inferred_tools
+                else:
+                    logger.warning(
+                        f"Step {step.step_number} still has no tools after heuristics, "
+                        f"using fallback tool"
+                    )
+                    processed_step.required_tools = ["subprocess_execute"]
+
+            processed_step.description = self._rewrite_description(
+                processed_step.description, processed_step.required_tools
+            )
+
+            processed_steps.append(processed_step)
+
+        return processed_steps
+
+    def _infer_tools_from_description(self, description: str, user_input: str) -> List[str]:
+        """
+        Infer tool names from step description using keyword matching.
+
+        Args:
+            description: Step description
+            user_input: Original user input for context
+
+        Returns:
+            List of inferred tool names
+        """
+        full_context = f"{user_input} {description}".lower()
+        inferred = []
+
+        keyword_patterns = {
+            ("file", "create"): ["file_create"],
+            ("create", "file"): ["file_create"],
+            ("file", "list"): ["file_list"],
+            ("list", "file"): ["file_list"],
+            ("file", "delete"): ["file_delete"],
+            ("delete", "file"): ["file_delete"],
+            ("directory", "delete"): ["file_delete_directory"],
+            ("delete", "directory"): ["file_delete_directory"],
+            ("file", "move"): ["file_move"],
+            ("move", "file"): ["file_move"],
+            ("file", "copy"): ["file_copy"],
+            ("copy", "file"): ["file_copy"],
+            ("open", "notepad"): ["subprocess_open_application"],
+            ("open", "explorer"): ["subprocess_open_application"],
+            ("screenshot",): ["gui_capture_screen"],
+            ("capture", "screen"): ["gui_capture_screen"],
+            ("click", "mouse"): ["gui_click_mouse"],
+            ("type", "text"): ["typing_type_text"],
+            ("execute", "command"): ["subprocess_execute"],
+            ("powershell",): ["powershell_execute"],
+            ("system", "info"): ["powershell_get_system_info"],
+            ("process", "list"): ["subprocess_list_processes"],
+            ("ocr",): ["ocr_extract_from_image"],
+            ("extract", "text"): ["ocr_extract_from_image"],
+            ("registry",): ["registry_read_value"],
+        }
+
+        for keywords, tools in keyword_patterns.items():
+            if all(kw in full_context for kw in keywords):
+                inferred.extend(tools)
+
+        return list(dict.fromkeys(inferred)) if inferred else []
+
+    def _rewrite_description(self, description: str, required_tools: List[str]) -> str:
+        """
+        Rewrite vague descriptions into command-style text.
+
+        Args:
+            description: Original description
+            required_tools: Tools required for this step
+
+        Returns:
+            Rewritten description with action verbs
+        """
+        if not description:
+            if required_tools:
+                return f"Use {required_tools[0]} to perform the action"
+            return "Perform the action"
+
+        desc_lower = description.lower()
+
+        if any(
+            word in desc_lower for word in ["prepare", "initialize", "setup", "get ready", "begin"]
+        ):
+            if required_tools:
+                return f"Use {required_tools[0]} to prepare: {description}"
+            return f"Prepare: {description}"
+
+        if any(word in desc_lower for word in ["verify", "check", "validate"]):
+            if required_tools:
+                return f"Use {required_tools[0]} to verify: {description}"
+            return f"Verify: {description}"
+
+        if "use" not in desc_lower and required_tools:
+            tool_name = required_tools[0]
+            if any(
+                word in desc_lower
+                for word in [
+                    "create",
+                    "list",
+                    "delete",
+                    "move",
+                    "copy",
+                    "execute",
+                    "open",
+                    "click",
+                ]
+            ):
+                return f"Use {tool_name} to {description}"
+
+        return description
 
     def _check_dependencies(self, plan: Plan) -> List[str]:
         """

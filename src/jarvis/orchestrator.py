@@ -159,12 +159,16 @@ class Orchestrator:
         try:
             # Map required tools to system actions
             if not step.required_tools:
-                logger.info(f"Step {step.step_number} has no required tools, marking as completed")
+                logger.warning(
+                    f"Step {step.step_number} has no required tools (this should not happen "
+                    f"after post-processing)"
+                )
                 return {
                     "step_number": step.step_number,
                     "description": step.description,
-                    "success": True,
-                    "message": "No tools required, step completed",
+                    "success": False,
+                    "message": "Step has no required tools",
+                    "error": "No tools assigned to step",
                     "data": None,
                 }
 

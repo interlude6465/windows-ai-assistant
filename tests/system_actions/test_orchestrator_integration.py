@@ -285,7 +285,7 @@ class TestOrchestratorIntegration:
         assert "command" in params
 
     def test_execute_step_no_tools(self):
-        """Test executing step with no required tools."""
+        """Test executing step with no required tools (should fail after post-processing)."""
         config = Mock(spec=JarvisConfig)
         memory_store = Mock()
         router = Mock(spec=SystemActionRouter)
@@ -298,8 +298,9 @@ class TestOrchestratorIntegration:
 
         result = orchestrator._execute_step(step)
 
-        assert result["success"] is True
-        assert "No tools required" in result["message"]
+        # Should fail since all steps should have tools after post-processing
+        assert result["success"] is False
+        assert "no required tools" in result["message"].lower()
 
     def test_execute_step_unparseable_action(self):
         """Test executing step with unparseable action."""
