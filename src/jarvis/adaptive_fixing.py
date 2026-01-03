@@ -10,6 +10,7 @@ from typing import Optional, Tuple
 
 from jarvis.execution_models import CodeStep, FailureDiagnosis
 from jarvis.llm_client import LLMClient
+from jarvis.utils import clean_code
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +112,11 @@ class AdaptiveFixEngine:
         prompt = self._build_fix_prompt(step, diagnosis, retry_count)
 
         try:
-            fixed_code = self.llm_client.generate(prompt)
+            raw_code = self.llm_client.generate(prompt)
+            # Clean markdown formatting from generated code
+            fixed_code = clean_code(str(raw_code))
             logger.debug(f"Generated fix length: {len(fixed_code)} characters")
-            return str(fixed_code)
+            return fixed_code
         except Exception as e:
             logger.error(f"Failed to generate fix: {e}")
             raise

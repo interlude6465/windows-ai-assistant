@@ -12,6 +12,7 @@ import sys
 from typing import Generator, List, Optional, Tuple
 
 from jarvis.execution_models import CodeStep
+from jarvis.utils import clean_code
 
 logger = logging.getLogger(__name__)
 
@@ -241,9 +242,12 @@ class ExecutionMonitor:
             import os
             import tempfile
 
+            # Clean markdown formatting from code before writing
+            cleaned_code = clean_code(step.code)
+
             # Write code to temp file
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-                f.write(step.code)
+                f.write(cleaned_code)
                 temp_file = f.name
 
             try:

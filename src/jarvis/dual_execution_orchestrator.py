@@ -15,6 +15,7 @@ from jarvis.execution_models import CodeStep, ExecutionMode, ExecutionResult
 from jarvis.execution_monitor import ExecutionMonitor
 from jarvis.execution_router import ExecutionRouter
 from jarvis.llm_client import LLMClient
+from jarvis.utils import clean_code
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,7 @@ class DualExecutionOrchestrator:
         self.adaptive_fix_engine = AdaptiveFixEngine(llm_client)
         logger.info("DualExecutionOrchestrator initialized")
 
-    def process_request(
-        self, user_input: str
-    ) -> Generator[str, None, None]:
+    def process_request(self, user_input: str) -> Generator[str, None, None]:
         """
         Process user request with dual execution modes.
 
@@ -151,8 +150,8 @@ class DualExecutionOrchestrator:
                                 yield f"   ❌ Error detected in step {step.step_number}\n"
 
                                 # Parse error
-                                error_type, error_details = self.execution_monitor.parse_error_from_output(
-                                    error_output
+                                error_type, error_details = (
+                                    self.execution_monitor.parse_error_from_output(error_output)
                                 )
                                 yield f"   Error type: {error_type}\n"
                                 yield f"   Diagnosing failure...\n"
@@ -229,7 +228,9 @@ Requirements:
 Return only the code, no markdown formatting, no explanations."""
 
         try:
-            code = self.llm_client.generate(prompt)
+            raw_code = self.llm_client.generate(prompt)
+            # Clean markdown formatting from generated code
+            code = clean_code(raw_code)
             logger.debug(f"Generated code for step {step.step_number}: {len(code)} characters")
             return code
         except Exception as e:

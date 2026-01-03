@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Generator, Optional
 
 from jarvis.llm_client import LLMClient
+from jarvis.utils import clean_code
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,10 @@ class DirectExecutor:
 
         try:
             code = self.llm_client.generate(prompt)
-            logger.debug(f"Generated code length: {len(code)} characters")
-            return str(code)
+            # Clean markdown formatting from generated code
+            cleaned_code = clean_code(str(code))
+            logger.debug(f"Generated code length: {len(cleaned_code)} characters")
+            return cleaned_code
         except Exception as e:
             logger.error(f"Failed to generate code: {e}")
             raise
