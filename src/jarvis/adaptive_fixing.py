@@ -145,12 +145,17 @@ class AdaptiveFixEngine:
             temp_file = f.name
 
         try:
+            creation_flags = 0
+            if sys.platform == "win32":
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+
             # Execute fixed code using the current Python interpreter
             result = subprocess.run(
                 [sys.executable, temp_file],
                 capture_output=True,
                 text=True,
                 timeout=step.timeout_seconds,
+                creationflags=creation_flags,
             )
 
             output = result.stdout + result.stderr

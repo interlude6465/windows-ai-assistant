@@ -76,6 +76,10 @@ class SubprocessActions:
             )
 
         try:
+            creation_flags = 0
+            if sys.platform == "win32":
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+
             if capture_output:
                 result = subprocess.run(
                     command,
@@ -85,6 +89,7 @@ class SubprocessActions:
                     timeout=self.timeout,
                     cwd=working_directory,
                     env=env,
+                    creationflags=creation_flags,
                 )
 
                 stdout = result.stdout.strip() if result.stdout else ""
@@ -109,7 +114,13 @@ class SubprocessActions:
             else:
                 # For non-captured output, run without capture
                 process = subprocess.Popen(
-                    command, shell=shell, stdout=None, stderr=None, cwd=working_directory, env=env
+                    command,
+                    shell=shell,
+                    stdout=None,
+                    stderr=None,
+                    cwd=working_directory,
+                    env=env,
+                    creationflags=creation_flags,
                 )
 
                 process.wait(timeout=self.timeout)
@@ -203,7 +214,13 @@ class SubprocessActions:
                 if arguments:
                     command += f" {arguments}"
 
-            result = subprocess.run(command, shell=True, timeout=self.timeout)
+            creation_flags = 0
+            if sys.platform == "win32":
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+            result = subprocess.run(
+                command, shell=True, timeout=self.timeout, creationflags=creation_flags
+            )
 
             return ActionResult(
                 success=result.returncode == 0,

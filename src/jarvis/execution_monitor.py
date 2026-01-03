@@ -90,7 +90,7 @@ class ExecutionMonitor:
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
-                stdin=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 bufsize=1,  # Line buffering
                 universal_newlines=True,

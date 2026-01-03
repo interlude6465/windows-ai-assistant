@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Union
 
-import requests
+import requests  # type: ignore
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -31,9 +31,7 @@ class ActionResult(BaseModel):
     data: Optional[Dict[str, Any]] = Field(
         default=None, description="Additional structured data from the action"
     )
-    error: Optional[str] = Field(
-        default=None, description="Error message if action failed"
-    )
+    error: Optional[str] = Field(default=None, description="Error message if action failed")
     execution_time_ms: float = Field(description="Time taken to execute in milliseconds")
 
     model_config = {"arbitrary_types_allowed": True}
@@ -108,9 +106,7 @@ class ActionExecutor:
 
         return True
 
-    def list_files(
-        self, directory: Union[str, Path], recursive: bool = False
-    ) -> ActionResult:
+    def list_files(self, directory: Union[str, Path], recursive: bool = False) -> ActionResult:
         """
         List files in a directory.
 
@@ -178,9 +174,7 @@ class ActionExecutor:
                 execution_time_ms=(time.time() - start_time) * 1000,
             )
 
-    def create_file(
-        self, file_path: Union[str, Path], content: str = ""
-    ) -> ActionResult:
+    def create_file(self, file_path: Union[str, Path], content: str = "") -> ActionResult:
         """
         Create a new file with optional content.
 
@@ -393,9 +387,7 @@ class ActionExecutor:
                 execution_time_ms=(time.time() - start_time) * 1000,
             )
 
-    def move_file(
-        self, source: Union[str, Path], destination: Union[str, Path]
-    ) -> ActionResult:
+    def move_file(self, source: Union[str, Path], destination: Union[str, Path]) -> ActionResult:
         """
         Move or rename a file.
 
@@ -481,9 +473,7 @@ class ActionExecutor:
                 execution_time_ms=(time.time() - start_time) * 1000,
             )
 
-    def copy_file(
-        self, source: Union[str, Path], destination: Union[str, Path]
-    ) -> ActionResult:
+    def copy_file(self, source: Union[str, Path], destination: Union[str, Path]) -> ActionResult:
         """
         Copy a file.
 
@@ -672,7 +662,7 @@ class ActionExecutor:
                 "python_version": platform.python_version(),
             }
 
-            logger.info(f"Retrieved system info")
+            logger.info("Retrieved system info")
             return ActionResult(
                 success=True,
                 action_type="get_system_info",
@@ -691,9 +681,7 @@ class ActionExecutor:
                 execution_time_ms=(time.time() - start_time) * 1000,
             )
 
-    def get_weather(
-        self, location: str = "auto", timeout: int = 10
-    ) -> ActionResult:
+    def get_weather(self, location: str = "auto", timeout: int = 10) -> ActionResult:
         """
         Get weather information from wttr.in service.
 
@@ -715,7 +703,6 @@ class ActionExecutor:
 
             data = response.json()
             current = data.get("current_condition", [{}])[0]
-            forecast = data.get("weather", [{}])[0]
 
             weather_info = {
                 "location": location if location != "auto" else "Current Location",
@@ -795,33 +782,121 @@ class ActionExecutor:
 
             yield f"Executing: {command}\n"
 
+            import queue
+            import sys
+            import threading
+
+            creation_flags = 0
+            if sys.platform == "win32":
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+
             process = subprocess.Popen(
                 command,
                 shell=shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
                 text=True,
+                bufsize=1,
+                universal_newlines=True,
+                creationflags=creation_flags,
             )
 
+            # Use threading for non-blocking reads on Windows
+            stdout_queue = queue.Queue()  # type: ignore[var-annotated]
+            stderr_queue = queue.Queue()  # type: ignore[var-annotated]
+            error_event = threading.Event()
+
+            def read_output(pipe, queue_obj, source):
+                """Read from pipe and put lines into queue."""
+                try:
+                    for line in iter(pipe.readline, ""):
+                        if line:
+                            queue_obj.put((line, source))
+                        if error_event.is_set():
+                            break
+                except Exception as e:
+                    logger.error(f"Error reading {source}: {e}")
+                finally:
+                    queue_obj.put(None)  # Signal end of stream
+
+            # Start reader threads
+            stdout_thread = threading.Thread(
+                target=read_output, args=(process.stdout, stdout_queue, "stdout"), daemon=True
+            )
+            stderr_thread = threading.Thread(
+                target=read_output, args=(process.stderr, stderr_queue, "stderr"), daemon=True
+            )
+
+            stdout_thread.start()
+            stderr_thread.start()
+
+            all_stdout = []
+            all_stderr = []
+            stdout_done = False
+            stderr_done = False
+
             try:
-                stdout, stderr = process.communicate(timeout=timeout)
+                while not (stdout_done and stderr_done):
+                    # Check timeout
+                    if time.time() - start_time > timeout:
+                        logger.warning(f"Command execution timeout after {timeout}s")
+                        error_event.set()
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                        yield f"\n[ERROR] Command timed out after {timeout}s\n"
+                        result = ActionResult(
+                            success=False,
+                            action_type="execute_command",
+                            message=f"Command timed out after {timeout}s",
+                            error=f"Execution exceeded {timeout}s timeout",
+                            data={"command": command},
+                            execution_time_ms=(time.time() - start_time) * 1000,
+                        )
+                        return result
+
+                    # Try to get output from queues
+                    try:
+                        item = stdout_queue.get_nowait()
+                        if item is None:
+                            stdout_done = True
+                        else:
+                            line, _ = item
+                            all_stdout.append(line)
+                            yield line
+                    except queue.Empty:
+                        pass
+
+                    try:
+                        item = stderr_queue.get_nowait()
+                        if item is None:
+                            stderr_done = True
+                        else:
+                            line, _ = item
+                            all_stderr.append(line)
+                            yield f"[stderr] {line}"
+                    except queue.Empty:
+                        pass
+
+                    time.sleep(0.01)
+
+                process.wait()
                 exit_code = process.returncode
-
-                if stdout:
-                    yield stdout
-
-                if stderr:
-                    yield f"[stderr] {stderr}\n"
+                stdout_str = "".join(all_stdout)
+                stderr_str = "".join(all_stderr)
 
                 if exit_code == 0:
                     result = ActionResult(
                         success=True,
                         action_type="execute_command",
-                        message=f"Command executed successfully",
+                        message="Command executed successfully",
                         data={
                             "command": command,
                             "exit_code": exit_code,
-                            "output": stdout,
+                            "output": stdout_str,
                         },
                         execution_time_ms=(time.time() - start_time) * 1000,
                     )
@@ -830,16 +905,16 @@ class ActionExecutor:
                         success=False,
                         action_type="execute_command",
                         message=f"Command failed with exit code {exit_code}",
-                        error=stderr or "Unknown error",
+                        error=stderr_str or "Unknown error",
                         data={
                             "command": command,
                             "exit_code": exit_code,
-                            "output": stdout,
+                            "output": stdout_str,
                         },
                         execution_time_ms=(time.time() - start_time) * 1000,
                     )
 
-                logger.info(f"Command executed: {command} (exit code: {exit_code})")
+                logger.info("Command executed: %s (exit code: %s)", command, exit_code)
                 return result
 
             except subprocess.TimeoutExpired:

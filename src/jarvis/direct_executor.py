@@ -130,7 +130,7 @@ class DirectExecutor:
                 [sys.executable, str(script_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                stdin=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
