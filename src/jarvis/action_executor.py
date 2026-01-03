@@ -32,7 +32,9 @@ class ActionResult(BaseModel):
         default=None, description="Additional structured data from the action"
     )
     error: Optional[str] = Field(default=None, description="Error message if action failed")
-    execution_time_ms: float = Field(description="Time taken to execute in milliseconds")
+    execution_time_ms: float = Field(
+        default=0.0, description="Time taken to execute in milliseconds"
+    )
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -601,12 +603,14 @@ class ActionExecutor:
                     ["open", str(path_to_open)],
                     check=True,
                     timeout=self.action_timeout,
+                    stdin=subprocess.DEVNULL,
                 )
             else:
                 subprocess.run(
                     ["xdg-open", str(path_to_open)],
                     check=True,
                     timeout=self.action_timeout,
+                    stdin=subprocess.DEVNULL,
                 )
 
             logger.info(f"Opened: {path_to_open}")
@@ -790,6 +794,9 @@ class ActionExecutor:
             if sys.platform == "win32":
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
 
+            logger.info(
+                f"ActionExecutor: Calling subprocess.Popen with creationflags={creation_flags}"
+            )
             process = subprocess.Popen(
                 command,
                 shell=shell,

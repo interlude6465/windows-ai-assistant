@@ -149,18 +149,93 @@ class AdaptiveFixEngine:
             if sys.platform == "win32":
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
 
+            import queue
+            import threading
+            import time
+
             # Execute fixed code using the current Python interpreter
-            result = subprocess.run(
+            logger.info(
+                f"AdaptiveFixEngine: Calling subprocess.Popen with creationflags={creation_flags}"
+            )
+            process = subprocess.Popen(
                 [sys.executable, temp_file],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
                 text=True,
-                timeout=step.timeout_seconds,
+                bufsize=1,
+                universal_newlines=True,
                 creationflags=creation_flags,
             )
 
-            output = result.stdout + result.stderr
+            stdout_queue: queue.Queue = queue.Queue()
+            stderr_queue: queue.Queue = queue.Queue()
+            error_event = threading.Event()
 
-            if result.returncode == 0:
+            def read_output(pipe, queue_obj):
+                try:
+                    for line in iter(pipe.readline, ""):
+                        if line:
+                            queue_obj.put(line)
+                        if error_event.is_set():
+                            break
+                except Exception:
+                    pass
+                finally:
+                    queue_obj.put(None)
+
+            stdout_thread = threading.Thread(
+                target=read_output, args=(process.stdout, stdout_queue), daemon=True
+            )
+            stderr_thread = threading.Thread(
+                target=read_output, args=(process.stderr, stderr_queue), daemon=True
+            )
+
+            stdout_thread.start()
+            stderr_thread.start()
+
+            all_stdout = []
+            all_stderr = []
+            stdout_done = False
+            stderr_done = False
+            start_time = time.time()
+
+            while not (stdout_done and stderr_done):
+                if time.time() - start_time > step.timeout_seconds:
+                    error_event.set()
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    raise subprocess.TimeoutExpired(
+                        [sys.executable, temp_file], step.timeout_seconds
+                    )
+
+                try:
+                    item = stdout_queue.get_nowait()
+                    if item is None:
+                        stdout_done = True
+                    else:
+                        all_stdout.append(item)
+                except queue.Empty:
+                    pass
+
+                try:
+                    item = stderr_queue.get_nowait()
+                    if item is None:
+                        stderr_done = True
+                    else:
+                        all_stderr.append(item)
+                except queue.Empty:
+                    pass
+
+                time.sleep(0.01)
+
+            process.wait()
+            output = "".join(all_stdout) + "".join(all_stderr)
+
+            if process.returncode == 0:
                 logger.info(f"Retry successful for step {step.step_number}")
                 return True, output, None
             else:
