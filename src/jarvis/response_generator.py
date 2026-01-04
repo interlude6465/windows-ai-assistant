@@ -5,7 +5,8 @@ Generates friendly responses for casual conversation and summaries for commands.
 """
 
 import logging
-from typing import Optional
+import re
+from typing import Optional, Tuple
 
 from jarvis.llm_client import LLMClient
 
@@ -139,6 +140,96 @@ class ResponseGenerator:
         # Default friendly response
         return "Hello! I'm here to help. What would you like me to do for you?"
 
+    def _parse_execution_status(self, execution_result: str) -> Tuple[int, int]:
+        """
+        Parse execution result to count total and successful steps.
+
+        Args:
+            execution_result: String containing execution results
+
+        Returns:
+            Tuple of (total_steps, successful_steps)
+        """
+        total_steps = 0
+        successful_steps = 0
+
+        # Look for step completion patterns
+        step_patterns = [
+            r"Step (\d+).*completed successfully",
+            r"✅ Step (\d+)",
+            r"\[Step (\d+)\] completed",
+        ]
+
+        for pattern in step_patterns:
+            matches = re.findall(pattern, execution_result, re.IGNORECASE)
+            successful_steps += len(matches)
+            total_steps = max(total_steps, max([int(m) for m in matches], default=0))
+
+        # Count other completed steps
+        success_indicators = [
+            "✓ Step",
+            "✓ Code generated",
+            "✓ Execution complete",
+            "✓ Successfully",
+        ]
+
+        for indicator in success_indicators:
+            successful_steps += execution_result.count(indicator)
+
+        # If we found step numbers, that's our total
+        if total_steps > 0:
+            return total_steps, successful_steps
+
+        # Otherwise, estimate based on indicators
+        total_steps = max(1, successful_steps)
+        return total_steps, successful_steps
+
+    def _build_partial_success_summary(
+        self, original_input: str, execution_result: str, successful_steps: int, total_steps: int
+    ) -> str:
+        """Build a partial success summary response."""
+        # Try to identify what failed from execution result
+        failed_parts = []
+        if "Error" in execution_result or "Failed" in execution_result:
+            # Extract error lines
+            lines = execution_result.split("\n")
+            for line in lines:
+                if "error" in line.lower() or "failed" in line.lower():
+                    failed_parts.append(line.strip())
+
+        response = f"I completed {successful_steps} out of {total_steps} steps. "
+
+        if failed_parts:
+            response += f"Had issues with: {failed_parts[0]}"
+        else:
+            response += "Some steps encountered issues."
+
+        response += " Would you like me to try a different approach?"
+
+        return response
+
+    def _build_failure_summary(self, original_input: str, execution_result: str) -> str:
+        """Build a failure summary response."""
+        # Try to identify what went wrong
+        error_type = "issues"
+        if "ImportError" in execution_result:
+            error_type = "import errors"
+        elif "FileNotFoundError" in execution_result:
+            error_type = "file access issues"
+        elif "PermissionError" in execution_result:
+            error_type = "permission issues"
+        elif "SyntaxError" in execution_result:
+            error_type = "syntax errors"
+        elif "ConnectionError" in execution_result:
+            error_type = "connection issues"
+        elif "Timeout" in execution_result:
+            error_type = "timeout issues"
+
+        return (
+            f"I tried to {original_input} but ran into {error_type}. "
+            "Would you like me to try a different approach or provide more details?"
+        )
+
     def _generate_command_response(self, original_input: str, execution_result: str) -> str:
         """
         Generate a summary response for commands.
@@ -152,11 +243,21 @@ class ResponseGenerator:
         """
         logger.debug(f"Generating command response for: {original_input}")
 
-        # If execution was successful, provide success summary
-        if "success" in execution_result.lower() or "complete" in execution_result.lower():
+        # Parse execution result for status
+        total_steps, successful_steps = self._parse_execution_status(execution_result)
+
+        # All success
+        if successful_steps == total_steps and total_steps > 0:
             return self._build_success_summary(original_input, execution_result)
-        elif "error" in execution_result.lower() or "failed" in execution_result.lower():
-            return self._build_error_summary(original_input, execution_result)
+        # Partial success
+        elif successful_steps > 0 and successful_steps < total_steps:
+            return self._build_partial_success_summary(
+                original_input, execution_result, successful_steps, total_steps
+            )
+        # All failed
+        elif successful_steps == 0 and total_steps > 0:
+            return self._build_failure_summary(original_input, execution_result)
+        # Unknown status (fallback)
         else:
             return self._build_neutral_summary(original_input, execution_result)
 

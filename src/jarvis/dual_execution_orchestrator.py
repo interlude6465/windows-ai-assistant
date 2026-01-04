@@ -6,7 +6,7 @@ complex step breakdown, monitoring, and adaptive fixing.
 """
 
 import logging
-from typing import Generator
+from typing import Generator, Optional
 
 from jarvis.adaptive_fixing import AdaptiveFixEngine
 from jarvis.code_step_breakdown import CodeStepBreakdown
@@ -15,6 +15,7 @@ from jarvis.execution_models import CodeStep, ExecutionMode
 from jarvis.execution_monitor import ExecutionMonitor
 from jarvis.execution_router import ExecutionRouter
 from jarvis.llm_client import LLMClient
+from jarvis.mistake_learner import MistakeLearner
 from jarvis.utils import clean_code
 
 logger = logging.getLogger(__name__)
@@ -29,19 +30,23 @@ class DualExecutionOrchestrator:
     - PLANNING: Complex multi-step via CodeStepBreakdown + ExecutionMonitor + AdaptiveFixEngine
     """
 
-    def __init__(self, llm_client: LLMClient) -> None:
+    def __init__(
+        self, llm_client: LLMClient, mistake_learner: Optional[MistakeLearner] = None
+    ) -> None:
         """
         Initialize dual execution orchestrator.
 
         Args:
             llm_client: LLM client for code generation and analysis
+            mistake_learner: Mistake learner for storing and retrieving patterns
         """
         self.llm_client = llm_client
+        self.mistake_learner = mistake_learner or MistakeLearner()
         self.router = ExecutionRouter()
-        self.direct_executor = DirectExecutor(llm_client)
+        self.direct_executor = DirectExecutor(llm_client, self.mistake_learner)
         self.code_step_breakdown = CodeStepBreakdown(llm_client)
         self.execution_monitor = ExecutionMonitor()
-        self.adaptive_fix_engine = AdaptiveFixEngine(llm_client)
+        self.adaptive_fix_engine = AdaptiveFixEngine(llm_client, self.mistake_learner)
         logger.info("DualExecutionOrchestrator initialized")
 
     def process_request(self, user_input: str) -> Generator[str, None, None]:
