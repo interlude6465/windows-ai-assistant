@@ -6,10 +6,11 @@ re-running successful ones.
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from jarvis.execution_models import CodeStep, FailureDiagnosis
 from jarvis.llm_client import LLMClient
+from jarvis.mistake_learner import LearningPattern, MistakeLearner
 from jarvis.utils import clean_code
 
 logger = logging.getLogger(__name__)
@@ -25,17 +26,24 @@ class AdaptiveFixEngine:
     3. Generates a fix
     4. Re-executes ONLY that step
     5. Continues to next step
+    6. Stores successful fixes for future learning
     """
 
-    def __init__(self, llm_client: LLMClient) -> None:
+    def __init__(
+        self, llm_client: LLMClient, mistake_learner: Optional[MistakeLearner] = None
+    ) -> None:
         """
         Initialize adaptive fix engine.
 
         Args:
             llm_client: LLM client for diagnosis and fix generation
+            mistake_learner: Mistake learner for storing and retrieving patterns
         """
         self.llm_client = llm_client
-        logger.info("AdaptiveFixEngine initialized")
+        self.mistake_learner = mistake_learner or MistakeLearner()
+        self.max_retries = 10  # Increased retry limit
+        self.retry_history = {}
+        logger.info("AdaptiveFixEngine initialized with max_retries=10")
 
     def diagnose_failure(
         self,
@@ -120,6 +128,119 @@ class AdaptiveFixEngine:
         except Exception as e:
             logger.error(f"Failed to generate fix: {e}")
             raise
+
+    def learn_from_success(
+        self, step: CodeStep, diagnosis: FailureDiagnosis, fixed_code: str
+    ) -> None:
+        """
+        Store successful fix in learning database.
+
+        Args:
+            step: Original CodeStep that failed
+            diagnosis: FailureDiagnosis with error details
+            fixed_code: The fixed code that worked
+        """
+        try:
+            pattern = LearningPattern(
+                error_type=diagnosis.error_type,
+                error_pattern=diagnosis.error_details,
+                fix_applied=diagnosis.suggested_fix,
+                code_snippet=fixed_code,
+                tags=self._extract_tags_from_step(step),
+                source_language="python",
+            )
+            self.mistake_learner.store_pattern(pattern)
+            logger.info(f"Learned from successful fix of {diagnosis.error_type}")
+        except Exception as e:
+            logger.warning(f"Failed to save learning pattern: {e}")
+
+    def should_abort_retry(self, step_number: int, error_type: str, retry_count: int) -> bool:
+        """
+        Determine if we should abort retry attempts.
+
+        Args:
+            step_number: Current step number
+            error_type: Type of error
+            retry_count: Current retry attempt
+
+        Returns:
+            True if should abort
+        """
+        # Abort if retry count exceeds max
+        if retry_count >= self.max_retries:
+            logger.warning(f"Max retries ({self.max_retries}) exceeded for step {step_number}")
+            return True
+
+        # Track repeated errors
+        key = f"{step_number}:{error_type}"
+        if key not in self.retry_history:
+            self.retry_history[key] = {"count": 0, "last_fix_strategy": None}
+
+        self.retry_history[key]["count"] += 1
+
+        # Abort if same error repeats 3+ times
+        if self.retry_history[key]["count"] >= 3:
+            logger.warning(f"Same error ({error_type}) repeated 3+ times on step {step_number}")
+            return True
+
+        return False
+
+    def get_next_fix_strategy(self, retry_count: int, error_type: str) -> str:
+        """
+        Get the next fix strategy based on retry count.
+
+        Rotates through different strategies to maximize success probability.
+
+        Args:
+            retry_count: Current retry attempt number
+            error_type: Type of error
+
+        Returns:
+            Fix strategy to try
+        """
+        strategies = [
+            "regenerate_code",
+            "add_error_handling",
+            "add_input_validation",
+            "simplify_code",
+            "adjust_parameters",
+            "add_retry_logic",
+            "add_documentation",
+            "refactor_logic",
+            "add_comments",
+            "install_package",
+        ]
+
+        # Choose strategy based on retry count
+        strategy_index = retry_count % len(strategies)
+        return strategies[strategy_index]
+
+    def _extract_tags_from_step(self, step: CodeStep) -> List[str]:
+        """
+        Extract relevant tags from step for learning.
+
+        Args:
+            step: CodeStep
+
+        Returns:
+            List of tags
+        """
+        tags = ["general"]
+
+        description_lower = step.description.lower()
+
+        if any(word in description_lower for word in ["file", "write", "read", "save"]):
+            tags.append("file_ops")
+        if any(word in description_lower for word in ["desktop", "path", "directory"]):
+            tags.append("desktop")
+        if any(word in description_lower for word in ["error", "exception", "handling"]):
+            tags.append("error_handling")
+        if any(word in description_lower for word in ["network", "connection", "http", "api"]):
+            tags.append("network")
+        if "windows" in description_lower or "win32" in description_lower:
+            tags.append("windows")
+
+        return tags
 
     def retry_step_with_fix(
         self, step: CodeStep, fixed_code: str, max_retries: int = 3
