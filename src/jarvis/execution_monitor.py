@@ -152,14 +152,14 @@ class ExecutionMonitor:
 
     def parse_error_from_output(self, output: str) -> Tuple[str, str]:
         """
-        Parse failure reason from combined stdout/stderr.
-        Windows-compatible error parsing.
+        Parse failure reason from combined stdout/stderr with enhanced details.
+        Windows-compatible error parsing with better feedback.
 
         Args:
             output: Combined output from execution
 
         Returns:
-            Tuple of (error_type, error_details)
+            Tuple of (error_type, error_details_with_context)
         """
         logger.debug("Parsing error from output")
 
@@ -172,36 +172,109 @@ class ExecutionMonitor:
             if winerror_match:
                 error_code = winerror_match.group(1)
                 error_msg = winerror_match.group(2)
-                return ("WinError", f"Error {error_code}: {error_msg}")
+                context = self._extract_error_context(output)
+                return ("WinError", f"Error {error_code}: {error_msg}\nContext: {context}")
 
-        # Common Python errors
-        if "importerror" in output_lower:
-            return ("ImportError", output.split("\n")[-2] if "\n" in output else output)
+        # Common Python errors with enhanced details
+        if "importerror" in output_lower or "modulenotfounderror" in output_lower:
+            module_match = re.search(r"No module named ['\"]([^'\"]+)['\"]", output)
+            if module_match:
+                module_name = module_match.group(1)
+                return (
+                    "ImportError",
+                    f"Missing module: {module_name}\n"
+                    f"Suggestion: Install with 'pip install {module_name}' "
+                    f"or check if module exists",
+                )
+            return ("ImportError", self._extract_error_line(output))
+
         if "syntaxerror" in output_lower:
-            return ("SyntaxError", output.split("\n")[-2] if "\n" in output else output)
+            line_match = re.search(r"line (\d+)", output)
+            line_num = line_match.group(1) if line_match else "unknown"
+            return (
+                "SyntaxError",
+                f"Syntax error at line {line_num}\n{self._extract_error_line(output)}\n"
+                f"Suggestion: Check for missing colons, parentheses, or indentation issues",
+            )
+
         if "typeerror" in output_lower:
-            return ("TypeError", output.split("\n")[-2] if "\n" in output else output)
+            return (
+                "TypeError",
+                f"{self._extract_error_line(output)}\n"
+                f"Suggestion: Check argument types and function signatures",
+            )
+
         if "attributeerror" in output_lower:
-            return ("AttributeError", output.split("\n")[-2] if "\n" in output else output)
+            return (
+                "AttributeError",
+                f"{self._extract_error_line(output)}\n"
+                f"Suggestion: Check if object has the attribute or method being accessed",
+            )
+
         if "permissionerror" in output_lower:
-            return ("PermissionError", output.split("\n")[-2] if "\n" in output else output)
+            return (
+                "PermissionError",
+                f"{self._extract_error_line(output)}\n"
+                f"Suggestion: Check file permissions or run with elevated privileges",
+            )
+
+        if "filenotfounderror" in output_lower:
+            path_match = re.search(r"['\"]([^'\"]*)['\"]", output)
+            path = path_match.group(1) if path_match else "unknown"
+            return (
+                "FileNotFoundError",
+                f"File not found: {path}\n"
+                f"Suggestion: Check if path exists and create parent directories if needed",
+            )
+
         if "timeout" in output_lower or "timed out" in output_lower:
-            return ("TimeoutError", "Operation timed out")
+            return (
+                "TimeoutError",
+                "Operation timed out\n"
+                "Suggestion: Increase timeout value or optimize the operation",
+            )
+
         if "connectionerror" in output_lower or "connection" in output_lower:
-            return ("ConnectionError", output.split("\n")[-2] if "\n" in output else output)
+            return (
+                "ConnectionError",
+                f"{self._extract_error_line(output)}\n"
+                "Suggestion: Check network connectivity, firewall settings, or API endpoints",
+            )
 
         # Generic error keywords
         if "traceback" in output_lower:
             lines = output.split("\n")
-            return ("RuntimeError", lines[-2] if len(lines) > 1 else output)
-        if "exception" in output_lower:
-            lines = output.split("\n")
-            return ("Exception", lines[-2] if len(lines) > 1 else output)
-        if "failed" in output_lower:
-            lines = output.split("\n")
-            return ("ExecutionError", lines[-2] if len(lines) > 1 else output)
+            error_line = lines[-2] if len(lines) > 1 else output
+            return (
+                "RuntimeError",
+                f"{error_line}\n" f"Context: {self._extract_error_context(output)}",
+            )
 
-        return ("Error", output[:200])  # First 200 chars as fallback
+        if "exception" in output_lower:
+            return ("Exception", f"{self._extract_error_line(output)}\nFull output: {output[:300]}")
+
+        if "failed" in output_lower:
+            return (
+                "ExecutionError",
+                f"{self._extract_error_line(output)}\nFull output: {output[:300]}",
+            )
+
+        return ("Error", f"Unrecognized error\nOutput: {output[:300]}")
+
+    def _extract_error_line(self, output: str) -> str:
+        """Extract the most relevant error line from output."""
+        lines = [line for line in output.split("\n") if line.strip()]
+        if not lines:
+            return "No error details available"
+        # Return last non-empty line which usually contains the error
+        return lines[-1] if lines else output[:200]
+
+    def _extract_error_context(self, output: str) -> str:
+        """Extract context around the error from output."""
+        lines = output.split("\n")
+        # Get last 5 lines for context
+        context_lines = [line for line in lines[-5:] if line.strip()]
+        return "\n".join(context_lines) if context_lines else "No context available"
 
     def _is_error_line(self, line: str) -> bool:
         """

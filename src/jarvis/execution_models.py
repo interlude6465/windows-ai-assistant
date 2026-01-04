@@ -6,7 +6,7 @@ execution monitor, and adaptive fixing engine.
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,9 +24,7 @@ class CodeStep(BaseModel):
     step_number: int = Field(description="Sequential step number")
     description: str = Field(description="Description of the step")
     code: Optional[str] = Field(default=None, description="Code to execute for this step")
-    command: Optional[List[str]] = Field(
-        default=None, description="Shell command to execute"
-    )
+    command: Optional[List[str]] = Field(default=None, description="Shell command to execute")
     expected_output_pattern: Optional[str] = Field(
         default=None, description="Regex to validate success"
     )
@@ -36,9 +34,15 @@ class CodeStep(BaseModel):
         default="output_pattern",
         description="Validation method: output_pattern, file_exists, syntax_check, manual",
     )
-    max_retries: int = Field(default=3, description="Maximum retry attempts")
-    timeout_seconds: int = Field(default=30, description="Step timeout in seconds")
-    status: str = Field(default="pending", description="Step status: pending, running, completed, failed")
+    max_retries: int = Field(
+        default=5, description="Maximum retry attempts (increased for persistence)"
+    )
+    timeout_seconds: int = Field(
+        default=60, description="Step timeout in seconds (increased for complex operations)"
+    )
+    status: str = Field(
+        default="pending", description="Step status: pending, running, completed, failed"
+    )
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -51,7 +55,9 @@ class FailureDiagnosis(BaseModel):
     root_cause: str = Field(description="Root cause analysis")
     suggested_fix: str = Field(description="Suggested fix")
     fix_strategy: str = Field(
-        description="Fix strategy: regenerate_code, add_retry_logic, install_package, adjust_parameters"
+        description=(
+            "Fix strategy: regenerate_code, add_retry_logic, " "install_package, adjust_parameters"
+        )
     )
     confidence: float = Field(default=0.7, description="Confidence in diagnosis (0.0-1.0)")
 

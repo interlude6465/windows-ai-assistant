@@ -9,11 +9,10 @@ Handles loading settings from YAML/JSON files with support for:
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -23,13 +22,17 @@ class LLMConfig(BaseModel):
     """Configuration for LLM provider."""
 
     provider: str = Field(default="ollama", description="LLM provider (e.g., ollama, local)")
-    model: str = Field(default="llama3", description="Model name or path")
+    model: str = Field(
+        default="codellama:13b", description="Model name or path (CodeLlama for code generation)"
+    )
     base_url: Optional[str] = Field(
         default="http://localhost:11434", description="Base URL for provider"
     )
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=2048, ge=1)
-    timeout: int = Field(default=60, ge=1, description="Request timeout in seconds")
+    temperature: float = Field(
+        default=0.3, ge=0.0, le=2.0, description="Lower temperature for more deterministic code"
+    )
+    max_tokens: int = Field(default=4096, ge=1, description="Larger context for complex code")
+    timeout: int = Field(default=90, ge=1, description="Request timeout in seconds")
 
 
 class BrainLLMConfig(BaseModel):
@@ -141,7 +144,12 @@ class ExecutionConfig(BaseModel):
     enable_retry: bool = Field(
         default=True, description="Enable retry with fallback strategies on failure"
     )
-    max_retries: int = Field(default=3, ge=1, le=10, description="Maximum number of retry attempts")
+    max_retries: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Maximum number of retry attempts (increased for persistence)",
+    )
 
 
 class OCRConfig(BaseModel):
@@ -250,6 +258,7 @@ class ConfigLoader:
         """
         if self.config is None:
             self.load()
+        assert self.config is not None
         return self.config
 
     def to_dict(self) -> Dict[str, Any]:
@@ -261,9 +270,12 @@ class ConfigLoader:
         """
         if self.config is None:
             self.load()
+        assert self.config is not None
         config_dict = self.config.model_dump()
         # Convert Path objects to strings for YAML serialization
-        return self._convert_paths_to_strings(config_dict)
+        result = self._convert_paths_to_strings(config_dict)
+        # mypy can't infer that recursive conversion preserves Dict[str, Any] type
+        return result  # type: ignore[no-any-return]
 
     def _convert_paths_to_strings(self, obj: Any) -> Any:
         """
@@ -292,4 +304,4 @@ class ConfigLoader:
         """
         if self.config is None:
             self.load()
-        return yaml.dump(self.to_dict(), default_flow_style=False)
+        return str(yaml.dump(self.to_dict(), default_flow_style=False))

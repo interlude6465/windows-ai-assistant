@@ -204,7 +204,7 @@ class DualExecutionOrchestrator:
 
     def _generate_step_code(self, step: CodeStep, user_input: str) -> str:
         """
-        Generate code for a step.
+        Generate code for a step with learned patterns injected.
 
         Args:
             step: CodeStep to generate code for
@@ -217,7 +217,20 @@ class DualExecutionOrchestrator:
 
 Step Description: {step.description}
 
-Original Request: {user_input}
+Original Request: {user_input}"""
+
+        # Inject learned patterns from mistake learner
+        try:
+            from jarvis.mistake_learner import MistakeLearner
+
+            mistake_learner = MistakeLearner()
+            learned_fixes = mistake_learner.retrieve_fixes(limit=3)
+            if learned_fixes:
+                prompt += "\n\n" + mistake_learner.format_fixes_for_prompt(learned_fixes)
+        except Exception as e:
+            logger.warning(f"Failed to retrieve learned fixes: {e}")
+
+        prompt += """
 
 Requirements:
 - Write complete, executable code
@@ -249,4 +262,4 @@ Return only the code, no markdown formatting, no explanations."""
             ExecutionMode (DIRECT or PLANNING)
         """
         mode, _ = self.router.classify(user_input)
-        return mode
+        return ExecutionMode(mode)
