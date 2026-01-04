@@ -10,6 +10,7 @@ from typing import Optional, Tuple
 
 from jarvis.execution_models import CodeStep, FailureDiagnosis
 from jarvis.llm_client import LLMClient
+from jarvis.mistake_learner import MistakeLearner
 from jarvis.utils import clean_code
 
 logger = logging.getLogger(__name__)
@@ -27,15 +28,19 @@ class AdaptiveFixEngine:
     5. Continues to next step
     """
 
-    def __init__(self, llm_client: LLMClient) -> None:
+    def __init__(
+        self, llm_client: LLMClient, mistake_learner: Optional[MistakeLearner] = None
+    ) -> None:
         """
         Initialize adaptive fix engine.
 
         Args:
             llm_client: LLM client for diagnosis and fix generation
+            mistake_learner: Optional MistakeLearner for storing/retrieving learned fixes
         """
         self.llm_client = llm_client
-        logger.info("AdaptiveFixEngine initialized")
+        self.mistake_learner = mistake_learner or MistakeLearner()
+        logger.info("AdaptiveFixEngine initialized with mistake learner")
 
     def diagnose_failure(
         self,
@@ -109,20 +114,30 @@ class AdaptiveFixEngine:
         """
         logger.info(f"Generating fix for step {step.step_number} (attempt {retry_count + 1})")
 
-        prompt = self._build_fix_prompt(step, diagnosis, retry_count)
+        # Retrieve relevant learned fixes
+        learned_fixes = self.mistake_learner.retrieve_fixes(
+            error_type=diagnosis.error_type,
+            limit=3,
+        )
+
+        prompt = self._build_fix_prompt(step, diagnosis, retry_count, learned_fixes)
 
         try:
             raw_code = self.llm_client.generate(prompt)
             # Clean markdown formatting from generated code
             fixed_code = clean_code(str(raw_code))
             logger.debug(f"Generated fix length: {len(fixed_code)} characters")
-            return fixed_code
+            return str(fixed_code)
         except Exception as e:
             logger.error(f"Failed to generate fix: {e}")
             raise
 
     def retry_step_with_fix(
-        self, step: CodeStep, fixed_code: str, max_retries: int = 3
+        self,
+        step: CodeStep,
+        fixed_code: str,
+        diagnosis: FailureDiagnosis,
+        max_retries: int = 3,
     ) -> Tuple[bool, str, Optional[str]]:
         """
         Execute fixed code and check if it passes.
@@ -132,6 +147,7 @@ class AdaptiveFixEngine:
         Args:
             step: CodeStep with updated code
             fixed_code: Fixed code to execute
+            diagnosis: The diagnosis that led to this fix
             max_retries: Maximum retry attempts
 
         Returns:
@@ -174,6 +190,10 @@ class AdaptiveFixEngine:
 
             if process.returncode == 0:
                 logger.info(f"Retry successful for step {step.step_number}")
+
+                # Store the successful fix in mistake learner
+                self._store_successful_fix(step, diagnosis, fixed_code)
+
                 return True, output, None
             else:
                 logger.warning(f"Retry failed for step {step.step_number}: {output[:200]}")
@@ -193,6 +213,48 @@ class AdaptiveFixEngine:
                 os.unlink(temp_file)
             except Exception:
                 pass
+
+    def _store_successful_fix(
+        self,
+        step: CodeStep,
+        diagnosis: FailureDiagnosis,
+        fixed_code: str,
+    ) -> None:
+        """
+        Store a successful fix in the mistake learner.
+
+        Args:
+            step: The CodeStep that was fixed
+            diagnosis: The diagnosis that led to the fix
+            fixed_code: The code that successfully fixed the issue
+        """
+        try:
+            # Extract relevant tags from step and diagnosis
+            tags = []
+            if "file" in step.description.lower():
+                tags.append("file_ops")
+            if "import" in diagnosis.error_type.lower():
+                tags.append("imports")
+            if (
+                "windows" in diagnosis.root_cause.lower()
+                or "win" in diagnosis.error_details.lower()
+            ):
+                tags.append("windows")
+            if "error handling" in diagnosis.suggested_fix.lower():
+                tags.append("error_handling")
+
+            # Store the fix
+            self.mistake_learner.store_fix(
+                error_type=diagnosis.error_type,
+                error_pattern=diagnosis.error_details[:200],  # Truncate to reasonable length
+                fix_strategy=diagnosis.fix_strategy,
+                code_snippet=fixed_code,
+                context=f"Step: {step.description}",
+                tags=tags,
+            )
+            logger.info(f"Stored successful fix for {diagnosis.error_type}")
+        except Exception as e:
+            logger.warning(f"Failed to store successful fix: {e}")
 
     def _build_diagnosis_prompt(
         self,
@@ -289,7 +351,11 @@ Return only valid JSON, no other text."""
         return prompt
 
     def _build_fix_prompt(
-        self, step: CodeStep, diagnosis: FailureDiagnosis, retry_count: int
+        self,
+        step: CodeStep,
+        diagnosis: FailureDiagnosis,
+        retry_count: int,
+        learned_fixes: Optional[list] = None,
     ) -> str:
         """Build prompt for generating fixed code."""
         prompt = f"""Generate fixed code for this failed step.
@@ -306,7 +372,13 @@ Diagnosis:
 - Suggested Fix: {diagnosis.suggested_fix}
 - Fix Strategy: {diagnosis.fix_strategy}
 
-This is retry attempt {retry_count + 1}.
+This is retry attempt {retry_count + 1}."""
+
+        # Inject learned fixes if available
+        if learned_fixes:
+            prompt += "\n\n" + self.mistake_learner.format_fixes_for_prompt(learned_fixes)
+
+        prompt += """
 
 Requirements:
 1. Fix the issue identified in the diagnosis

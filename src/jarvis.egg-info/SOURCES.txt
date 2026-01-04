@@ -25,6 +25,7 @@ src/jarvis/learn_cli.py
 src/jarvis/llm_client.py
 src/jarvis/logging_config.py
 src/jarvis/memory.py
+src/jarvis/mistake_learner.py
 src/jarvis/orchestrator.py
 src/jarvis/persistent_memory.py
 src/jarvis/reasoning.py

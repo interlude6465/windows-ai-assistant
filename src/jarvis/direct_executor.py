@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Generator, Optional
 
 from jarvis.llm_client import LLMClient
+from jarvis.mistake_learner import MistakeLearner
 from jarvis.utils import clean_code
 
 logger = logging.getLogger(__name__)
@@ -27,15 +28,19 @@ class DirectExecutor:
     3. Execute and stream output
     """
 
-    def __init__(self, llm_client: LLMClient) -> None:
+    def __init__(
+        self, llm_client: LLMClient, mistake_learner: Optional[MistakeLearner] = None
+    ) -> None:
         """
         Initialize direct executor.
 
         Args:
             llm_client: LLM client for code generation
+            mistake_learner: Optional MistakeLearner for retrieving learned patterns
         """
         self.llm_client = llm_client
-        logger.info("DirectExecutor initialized")
+        self.mistake_learner = mistake_learner or MistakeLearner()
+        logger.info("DirectExecutor initialized with mistake learner")
 
     def generate_code(self, user_request: str, language: str = "python") -> str:
         """
@@ -57,13 +62,17 @@ class DirectExecutor:
             # Clean markdown formatting from generated code
             cleaned_code = clean_code(str(code))
             logger.debug(f"Generated code length: {len(cleaned_code)} characters")
-            return cleaned_code
+            return str(cleaned_code)
         except Exception as e:
             logger.error(f"Failed to generate code: {e}")
             raise
 
     def write_execution_script(
-        self, code: str, filename: Optional[str] = None, directory: Optional[Path] = None
+        self,
+        code: str,
+        filename: Optional[str] = None,
+        directory: Optional[Path] = None,
+        auto_save_to_desktop: bool = True,
     ) -> Path:
         """
         Write generated code to a file.
@@ -71,13 +80,20 @@ class DirectExecutor:
         Args:
             code: Code content to write
             filename: Optional filename (auto-generated if not provided)
-            directory: Optional directory (uses temp dir if not provided)
+            directory: Optional directory (defaults to Desktop if auto_save_to_desktop=True)
+            auto_save_to_desktop: If True and directory is None, save to Desktop
 
         Returns:
             Path to the written file
         """
         if directory is None:
-            directory = Path(tempfile.gettempdir())
+            if auto_save_to_desktop:
+                # Auto-save to Desktop without dialogs
+                desktop_path = self._get_desktop_path()
+                directory = desktop_path / "JarvisScripts"
+                logger.info("Auto-saving to Desktop/JarvisScripts")
+            else:
+                directory = Path(tempfile.gettempdir())
 
         if filename is None:
             # Auto-generate filename with timestamp
@@ -103,6 +119,33 @@ class DirectExecutor:
         except Exception as e:
             logger.error(f"Failed to write script: {e}")
             raise
+
+    def _get_desktop_path(self) -> Path:
+        """
+        Get the path to the user's Desktop directory.
+
+        Works on Windows, macOS, and Linux.
+
+        Returns:
+            Path to Desktop directory
+        """
+        import os
+
+        if sys.platform == "win32":
+            # Windows
+            desktop = Path(os.path.expandvars(r"%USERPROFILE%\Desktop"))
+        elif sys.platform == "darwin":
+            # macOS
+            desktop = Path.home() / "Desktop"
+        else:
+            # Linux and others
+            desktop = Path.home() / "Desktop"
+
+        if not desktop.exists():
+            logger.warning(f"Desktop path not found: {desktop}, falling back to home directory")
+            desktop = Path.home()
+
+        return desktop
 
     def stream_execution(self, script_path: Path, timeout: int = 30) -> Generator[str, None, None]:
         """
@@ -213,7 +256,14 @@ class DirectExecutor:
         """
         prompt = f"""Write a {language} script that does the following:
 
-{user_request}
+{user_request}"""
+
+        # Inject relevant learned fixes
+        learned_fixes = self.mistake_learner.retrieve_fixes(limit=3)
+        if learned_fixes:
+            prompt += "\n\n" + self.mistake_learner.format_fixes_for_prompt(learned_fixes)
+
+        prompt += """
 
 Requirements:
 - Write complete, executable code
