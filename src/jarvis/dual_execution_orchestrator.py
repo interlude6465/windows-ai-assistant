@@ -15,7 +15,9 @@ from jarvis.execution_models import CodeStep, ExecutionMode
 from jarvis.execution_monitor import ExecutionMonitor
 from jarvis.execution_router import ExecutionRouter
 from jarvis.llm_client import LLMClient
+from jarvis.memory_models import ExecutionMemory
 from jarvis.mistake_learner import MistakeLearner
+from jarvis.persistent_memory import MemoryModule
 from jarvis.retry_parsing import format_attempt_progress, parse_retry_limit
 from jarvis.utils import clean_code
 
@@ -32,7 +34,10 @@ class DualExecutionOrchestrator:
     """
 
     def __init__(
-        self, llm_client: LLMClient, mistake_learner: Optional[MistakeLearner] = None
+        self,
+        llm_client: LLMClient,
+        mistake_learner: Optional[MistakeLearner] = None,
+        memory_module: Optional[MemoryModule] = None,
     ) -> None:
         """
         Initialize dual execution orchestrator.
@@ -40,11 +45,13 @@ class DualExecutionOrchestrator:
         Args:
             llm_client: LLM client for code generation and analysis
             mistake_learner: Mistake learner for storing and retrieving patterns
+            memory_module: Optional memory module for tracking executions
         """
         self.llm_client = llm_client
         self.mistake_learner = mistake_learner or MistakeLearner()
+        self.memory_module = memory_module
         self.router = ExecutionRouter()
-        self.direct_executor = DirectExecutor(llm_client, self.mistake_learner)
+        self.direct_executor = DirectExecutor(llm_client, self.mistake_learner, memory_module)
         self.code_step_breakdown = CodeStepBreakdown(llm_client)
         self.execution_monitor = ExecutionMonitor()
         self.adaptive_fix_engine = AdaptiveFixEngine(llm_client, self.mistake_learner)

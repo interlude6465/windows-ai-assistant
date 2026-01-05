@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Generator, Optional
 
 from jarvis.llm_client import LLMClient
+from jarvis.memory_models import ExecutionMemory
 from jarvis.mistake_learner import MistakeLearner
+from jarvis.persistent_memory import MemoryModule
 from jarvis.retry_parsing import format_attempt_progress, parse_retry_limit
 from jarvis.utils import clean_code
 
@@ -33,7 +35,10 @@ class DirectExecutor:
     """
 
     def __init__(
-        self, llm_client: LLMClient, mistake_learner: Optional[MistakeLearner] = None
+        self,
+        llm_client: LLMClient,
+        mistake_learner: Optional[MistakeLearner] = None,
+        memory_module: Optional[MemoryModule] = None,
     ) -> None:
         """
         Initialize direct executor.
@@ -41,9 +46,12 @@ class DirectExecutor:
         Args:
             llm_client: LLM client for code generation
             mistake_learner: Mistake learner for storing and retrieving patterns
+            memory_module: Optional memory module for tracking executions
         """
         self.llm_client = llm_client
         self.mistake_learner = mistake_learner or MistakeLearner()
+        self.memory_module = memory_module
+        self._execution_history: list[ExecutionMemory] = []
         logger.info("DirectExecutor initialized")
 
     def generate_code(self, user_request: str, language: str = "python") -> str:
@@ -79,16 +87,19 @@ class DirectExecutor:
 
             # Handle desktop save request
             if save_to_desktop:
-                cleaned_code = self._ensure_desktop_save(cleaned_code, user_request)
+                cleaned_code = self._modify_for_desktop_save(cleaned_code, user_request)
 
-            logger.debug(f"Generated code length: {len(cleaned_code)} characters")
+            logger.debug(f"Generated {len(cleaned_code)} characters of {language} code")
             return str(cleaned_code)
         except Exception as e:
             logger.error(f"Failed to generate code: {e}")
             raise
 
     def write_execution_script(
-        self, code: str, filename: Optional[str] = None, directory: Optional[Path] = None
+        self,
+        code: str,
+        filename: Optional[str] = None,
+        directory: Optional[Path] = None,
     ) -> Path:
         """
         Write generated code to a file.
@@ -106,8 +117,6 @@ class DirectExecutor:
 
         if filename is None:
             # Auto-generate filename with timestamp
-            import time
-
             timestamp = int(time.time())
             filename = f"jarvis_script_{timestamp}.py"
 
@@ -194,7 +203,7 @@ class DirectExecutor:
     ) -> Generator[str, None, None]:
         """Execute a user request end-to-end.
 
-        Retries indefinitely by default (per-attempt timeout still applies). If the
+        Retries indefinitely by default (per-attempt timeout still applies). If
         user specifies a max attempt limit, that limit is respected.
         """
 
@@ -248,6 +257,37 @@ class DirectExecutor:
 
                 if exit_code == 0:
                     yield "\n\n✅ Execution complete\n"
+
+                    # Save execution to memory
+                    if self.memory_module:
+                        try:
+                            execution_id = self.memory_module.save_execution(
+                                user_request=user_request,
+                                description=self._generate_description(user_request, code),
+                                code_generated=code,
+                                file_locations=[str(script_path)],
+                                output=combined_output,
+                                success=True,
+                                tags=["python", "direct_execution"],
+                            )
+                            logger.info(f"Saved execution to memory: {execution_id}")
+
+                            # Add to history for this session
+                            exec_mem = ExecutionMemory(
+                                execution_id=execution_id,
+                                timestamp=time.time(),
+                                user_request=user_request,
+                                description=self._generate_description(user_request, code),
+                                code_generated=code,
+                                file_locations=[str(script_path)],
+                                output=combined_output,
+                                success=True,
+                                tags=["python", "direct_execution"],
+                            )
+                            self._execution_history.append(exec_mem)
+                        except Exception as e:
+                            logger.error(f"Failed to save execution to memory: {e}")
+
                     return
 
                 last_error_output = combined_output or f"Process exited with code {exit_code}"
@@ -285,6 +325,33 @@ class DirectExecutor:
         except subprocess.TimeoutExpired:
             return 124, f"Execution timed out after {timeout} seconds"
 
+    def _detect_desktop_save_request(self, user_request: str) -> bool:
+        """Detect if user wants to save to desktop."""
+        patterns = [
+            r"save\s+(?:it|them|the\s+file|to\s+desktop)",
+            r"(?:on|to)\s+desktop",
+            r"desktop\s+(?:folder|directory)",
+        ]
+        return any(re.search(pattern, user_request.lower()) for pattern in patterns)
+
+    def _modify_for_desktop_save(self, code: str, user_request: str) -> str:
+        """Modify code to save to desktop if requested."""
+        import re
+
+        desktop_pattern = re.compile(r"['\"]\s*\.\s*['\"]|['\"][^'\"]*['\"]")
+
+        # Check if there's a file open/write operation
+        if desktop_pattern.search(code):
+            # Replace with desktop path
+            desktop_path = str(Path.home() / "Desktop")
+            code = re.sub(
+                r"(['\"])(\.\s*|desktop)(['\"])",
+                rf"\1{desktop_path}\3",
+                code,
+                flags=re.IGNORECASE,
+            )
+        return code
+
     def _generate_fix_code(
         self,
         user_request: str,
@@ -293,112 +360,48 @@ class DirectExecutor:
         language: str,
         attempt: int,
     ) -> str:
-        prompt = f"""The following {language} script failed.
-
-User request:
-{user_request}
-
-Previous code:
-```{language}
-{previous_code}
-```
-
-Error/output:
-{error_output}
-
-Please produce a corrected, complete, executable {language} script.
-
-Requirements:
-- Fix the failure based on the error/output
-- Add error handling and make it robust
-- Return ONLY the code (no markdown, no explanation)
-
-This is attempt #{attempt}."""
-
-        raw_code = self.llm_client.generate(prompt)
-        return str(clean_code(str(raw_code)))
-
-    def _detect_desktop_save_request(self, user_request: str) -> bool:
         """
-        Detect if user wants to save to desktop.
+        Generate fixed code based on error output.
 
         Args:
-            user_request: User's request
+            user_request: Original user request
+            previous_code: Code that failed
+            error_output: Error message/output
+            language: Programming language
+            attempt: Current attempt number
 
         Returns:
-            True if desktop save requested
+            Fixed code
         """
-        request_lower = user_request.lower()
-        desktop_keywords = [
-            "save to desktop",
-            "save file to desktop",
-            "save on desktop",
-            "desktop save",
-            "save script to desktop",
-            "write to desktop",
-            "create on desktop",
-            "desktop file",
-        ]
+        prompt = f"""The following {language} code failed:
 
-        for keyword in desktop_keywords:
-            if keyword in request_lower:
-                return True
-        return False
+Request: {user_request}
+Attempt: {attempt}
+Error: {error_output}
 
-    def _ensure_desktop_save(self, code: str, user_request: str) -> str:
-        """
-        Ensure code writes directly to desktop.
+Previous Code:
+{previous_code[:1000]}
 
-        Args:
-            code: Generated code
-            user_request: User's original request
+Analyze the error and provide a FIXED version that:
+1. Addresses the specific error
+2. Maintains the original intent
+3. Uses proper error handling
+4. Includes comments explaining the fix
 
-        Returns:
-            Modified code with desktop path
-        """
-        # If code already has pathlib or Desktop logic, skip
-        if "Path.home()" in code or "Desktop" in code:
-            return code
+Return ONLY the complete fixed code, no markdown formatting."""
 
-        # Generate filename from request
-        filename = self._generate_desktop_filename(user_request)
+        try:
+            code = self.llm_client.generate(prompt)
+            cleaned_code = clean_code(str(code))
+            logger.debug(f"Generated fix for attempt {attempt}")
+            return str(cleaned_code)
+        except Exception as e:
+            logger.error(f"Failed to generate fix code: {e}")
+            raise
 
-        # Inject desktop save code at the end
-        desktop_code = "from pathlib import Path\n"
-        desktop_code += f'desktop_path = Path.home() / "Desktop" / "{filename}"\n'
-        desktop_code += 'with open(desktop_path, "w") as f:\n'
-        desktop_code += '    if "code" in dir():\n'
-        desktop_code += "        f.write(code)\n"
-        desktop_code += "    else:\n"
-        desktop_code += '        f.write("Execution output")\n'
-        desktop_code += 'print(f"File saved to: {desktop_path}")\n'
-
-        return code + "\n\n" + desktop_code
-
-    def _generate_desktop_filename(self, user_request: str) -> str:
-        """
-        Generate auto-generated filename based on user request.
-
-        Args:
-            user_request: User's request
-
-        Returns:
-            Auto-generated filename
-        """
-        # Try to extract keywords from request
-        request_lower = user_request.lower()
-
-        # Clean up request for filename
-        words = re.sub(r"[^a-zA-Z0-9 ]", "", request_lower).split()
-
-        # Get key words (skip common words)
-        common_words = ["save", "to", "desktop", "create", "write", "script", "file", "program"]
-        keywords = [w for w in words if w not in common_words][:3]
-
-        if keywords:
-            filename_base = "_".join(keywords)
-        else:
-            filename_base = "jarvis_script"
+    def _generate_filename(self, filename_base: str) -> str:
+        """Generate a filename with timestamp."""
+        import time
 
         # Add timestamp
         timestamp = int(time.time())
@@ -427,7 +430,7 @@ Requirements:
 - Include proper error handling
 - Add comments explaining the code
 - Make it production-ready
-- No extra text or explanations, just the code
+- No extra text or explanations, just code
 -- No markdown formatting, no explanations."""
 
         # Inject learned patterns
@@ -435,8 +438,49 @@ Requirements:
             prompt += "\n\nBased on previous mistakes, also include:\n"
             for i, pattern in enumerate(learned_patterns[:5], 1):
                 prompt += f"{i}. For {pattern.get('error_type')}: {pattern.get('fix_applied')}\n"
-            prompt += "\nApply these patterns to avoid the same errors.\n"
+            prompt += "\nApply these patterns to avoid of same errors.\n"
 
         prompt += """
-Return only the code, no markdown formatting, no explanations."""
+        Return only code, no markdown formatting, no explanations."""
         return prompt
+
+    def _generate_description(self, user_request: str, code: str) -> str:
+        """
+        Generate a semantic description for an execution.
+
+        Args:
+            user_request: Original user request
+            code: Generated code
+
+        Returns:
+            Semantic description
+        """
+        # Extract key concepts from user request
+        request_lower = user_request.lower()
+
+        if "file" in request_lower or "count" in request_lower:
+            return f"File {user_request}"
+
+        if "web" in request_lower or "scrape" in request_lower or "download" in request_lower:
+            return "Web scraper"
+
+        if "api" in request_lower:
+            return "API client"
+
+        if "data" in request_lower or "process" in request_lower:
+            return "Data processing script"
+
+        if "gui" in request_lower or "window" in request_lower or "interface" in request_lower:
+            return "GUI application"
+
+        if "sort" in request_lower or "filter" in request_lower:
+            return "Data manipulation script"
+
+        if "convert" in request_lower or "transform" in request_lower:
+            return "Data conversion script"
+
+        if "backup" in request_lower or "copy" in request_lower:
+            return "File backup script"
+
+        # Default description
+        return f"Python script: {user_request[:50]}"

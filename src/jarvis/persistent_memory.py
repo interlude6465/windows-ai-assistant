@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from jarvis.json_backend import JSONBackend
+from jarvis.memory_models import ConversationMemory, ExecutionMemory
 from jarvis.sqlite_backend import SQLiteBackend
 from jarvis.storage_backend import MemoryEntry, StorageBackend
+from jarvis.conversation_backend import ConversationBackend
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,14 @@ class MemoryModule:
         else:
             storage_dir = Path.home() / ".jarvis" / "memory"
             self.backend = self._create_backend(backend_type, storage_dir)
+
+        # Initialize conversation backend for conversations and executions
+        if storage_dir:
+            conv_db_path = storage_dir / "conversations.db"
+        else:
+            conv_db_path = Path.home() / ".jarvis" / "memory" / "conversations.db"
+
+        self.conversation_backend = ConversationBackend(conv_db_path)
 
         logger.info(f"MemoryModule initialized with {backend_type} backend")
 
@@ -409,6 +419,7 @@ class MemoryModule:
         """Gracefully shutdown memory module."""
         try:
             self.backend.shutdown()
+            self.conversation_backend.shutdown()
             logger.info("Memory module shutdown complete")
         except Exception as e:
             logger.error(f"Failed to shutdown memory module: {e}")
@@ -418,3 +429,175 @@ class MemoryModule:
         logger.warning("Clearing all memory entries")
         for entry in self.list_memories():
             self.delete_memory(entry.id)
+
+    # Conversation and Execution Memory Methods
+
+    def save_conversation_turn(
+        self,
+        user_message: str,
+        assistant_response: str,
+        execution_history: List[ExecutionMemory] = None,
+        context_tags: List[str] = None,
+        session_id: Optional[str] = None,
+    ) -> str:
+        """
+        Save a conversation turn with execution history.
+
+        Args:
+            user_message: User's message
+            assistant_response: Assistant's response
+            execution_history: List of executions performed during this turn
+            context_tags: Tags for context categorization
+            session_id: Optional session identifier
+
+        Returns:
+            Turn ID of the saved conversation
+        """
+        turn_id = str(uuid.uuid4())
+        conversation = ConversationMemory(
+            turn_id=turn_id,
+            timestamp=datetime.now(),
+            user_message=user_message,
+            assistant_response=assistant_response,
+            execution_history=execution_history or [],
+            context_tags=context_tags or [],
+            session_id=session_id,
+        )
+
+        self.conversation_backend.save_conversation(conversation)
+        logger.info(f"Saved conversation turn: {turn_id}")
+        return turn_id
+
+    def save_execution(
+        self,
+        user_request: str,
+        description: str,
+        code_generated: str,
+        file_locations: List[str] = None,
+        output: str = "",
+        success: bool = True,
+        tags: List[str] = None,
+        execution_time_ms: Optional[int] = None,
+        error_message: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+    ) -> str:
+        """
+        Save an execution record.
+
+        Args:
+            user_request: Original user request
+            description: Semantic description of execution
+            code_generated: Code that was generated
+            file_locations: Where files were created
+            output: Execution output
+            success: Whether execution succeeded
+            tags: Tags for categorization
+            execution_time_ms: Execution time in milliseconds
+            error_message: Error message if failed
+            conversation_id: Optional conversation ID to link to
+
+        Returns:
+            Execution ID
+        """
+        execution_id = str(uuid.uuid4())
+        execution = ExecutionMemory(
+            execution_id=execution_id,
+            timestamp=datetime.now(),
+            user_request=user_request,
+            description=description,
+            code_generated=code_generated,
+            file_locations=file_locations or [],
+            output=output,
+            success=success,
+            tags=tags or [],
+            execution_time_ms=execution_time_ms,
+            error_message=error_message,
+        )
+
+        self.conversation_backend.save_execution(execution, conversation_id)
+        logger.info(f"Saved execution: {execution_id} - {description}")
+        return execution_id
+
+    def get_recent_conversations(
+        self, limit: int = 10, session_id: Optional[str] = None
+    ) -> List[ConversationMemory]:
+        """
+        Get recent conversation turns.
+
+        Args:
+            limit: Maximum number of conversations
+            session_id: Optional session filter
+
+        Returns:
+            List of recent conversations
+        """
+        return self.conversation_backend.get_recent_conversations(limit, session_id)
+
+    def get_recent_executions(
+        self, limit: int = 20, successful_only: bool = False
+    ) -> List[ExecutionMemory]:
+        """
+        Get recent executions.
+
+        Args:
+            limit: Maximum number of executions
+            successful_only: If True, only return successful executions
+
+        Returns:
+            List of recent executions
+        """
+        return self.conversation_backend.get_recent_executions(limit, successful_only)
+
+    def search_by_description(
+        self, query: str, limit: int = 5
+    ) -> List[ExecutionMemory]:
+        """
+        Find past executions by description search.
+
+        Args:
+            query: Search query (e.g., "web scraper")
+            limit: Maximum results
+
+        Returns:
+            List of matching executions
+        """
+        return self.conversation_backend.search_executions_by_description(query, limit)
+
+    def get_file_locations(self, description: str) -> List[str]:
+        """
+        Get file paths for something we created.
+
+        Args:
+            description: Description to search for
+
+        Returns:
+            List of file paths
+        """
+        return self.conversation_backend.get_file_locations(description)
+
+    def get_recent_context(self, num_turns: int = 5) -> str:
+        """
+        Get recent conversation context for injection.
+
+        Args:
+            num_turns: Number of recent turns to include
+
+        Returns:
+            Formatted context string
+        """
+        conversations = self.get_recent_conversations(limit=num_turns)
+        if not conversations:
+            return ""
+
+        context_parts = []
+        for conv in reversed(conversations):  # Oldest first for chronological order
+            context_parts.append(f"User: {conv.user_message}")
+            context_parts.append(f"Assistant: {conv.assistant_response}")
+
+            if conv.execution_history:
+                for exec_mem in conv.execution_history:
+                    if exec_mem.description:
+                        context_parts.append(f"  - Executed: {exec_mem.description}")
+
+        return "\n".join(context_parts)
+
