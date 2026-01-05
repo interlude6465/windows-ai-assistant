@@ -39,6 +39,7 @@ src/jarvis/orchestrator.py
 src/jarvis/output_validator.py
 src/jarvis/persistent_memory.py
 src/jarvis/program_deployer.py
+src/jarvis/prompt_injector.py
 src/jarvis/reasoning.py
 src/jarvis/response_generator.py
 src/jarvis/retry_parsing.py
