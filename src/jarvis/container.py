@@ -429,5 +429,8 @@ class Container:
         """
         if self._dual_execution_orchestrator is None:
             llm_client = self.get_llm_client(config_path=config_path)
-            self._dual_execution_orchestrator = DualExecutionOrchestrator(llm_client=llm_client)
+            memory_module = self.get_memory_module(config_path=config_path)
+            self._dual_execution_orchestrator = DualExecutionOrchestrator(
+                llm_client=llm_client, memory_module=memory_module
+            )
         return self._dual_execution_orchestrator

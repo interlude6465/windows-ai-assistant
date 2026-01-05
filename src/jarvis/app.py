@@ -16,6 +16,7 @@ from jarvis.chat import ChatMessage, ChatSession
 from jarvis.config import JarvisConfig
 from jarvis.intent_classifier import IntentClassifier
 from jarvis.orchestrator import Orchestrator
+from jarvis.persistent_memory import MemoryModule
 from jarvis.reasoning import Plan, ReasoningModule
 from jarvis.response_generator import ResponseGenerator
 
@@ -32,6 +33,7 @@ class GUIApp(customtkinter.CTk):
         config: Optional[JarvisConfig] = None,
         voice_callback: Optional[Callable[[str], None]] = None,
         dual_execution_orchestrator: Optional[Any] = None,
+        memory_module: Optional[MemoryModule] = None,
     ) -> None:
         """
         Initialize the GUI application.
@@ -50,6 +52,7 @@ class GUIApp(customtkinter.CTk):
         self.config = config or JarvisConfig()
         self.voice_callback = voice_callback
         self.dual_execution_orchestrator = dual_execution_orchestrator
+        self.memory_module = memory_module
 
         # Initialize intent classifier and response generator
         self.intent_classifier = IntentClassifier()
@@ -63,6 +66,7 @@ class GUIApp(customtkinter.CTk):
             dual_execution_orchestrator=dual_execution_orchestrator,
             intent_classifier=self.intent_classifier,
             response_generator=self.response_generator,
+            memory_module=memory_module,
         )
 
         # GUI state
@@ -340,6 +344,7 @@ def create_gui_app(
     config: Optional[JarvisConfig] = None,
     voice_callback: Optional[Callable[[str], None]] = None,
     dual_execution_orchestrator: Optional[Any] = None,
+    memory_module: Optional[MemoryModule] = None,
 ) -> GUIApp:
     """
     Create and return a GUI application instance.
@@ -350,6 +355,7 @@ def create_gui_app(
         config: Optional configuration
         voice_callback: Optional callback for voice input
         dual_execution_orchestrator: Optional dual execution orchestrator for code execution
+        memory_module: Optional memory module for persistent conversation and execution tracking
 
     Returns:
         Configured GUIApp instance
@@ -360,4 +366,5 @@ def create_gui_app(
         config=config,
         voice_callback=voice_callback,
         dual_execution_orchestrator=dual_execution_orchestrator,
+        memory_module=memory_module,
     )

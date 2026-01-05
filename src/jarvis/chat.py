@@ -14,7 +14,11 @@ from typing import Any, Dict, Generator, List, Optional
 from jarvis.config import JarvisConfig
 from jarvis.controller import Controller
 from jarvis.intent_classifier import IntentClassifier
+from jarvis.memory_models import ExecutionMemory
+from jarvis.memory_reference_resolver import ReferenceResolver
+from jarvis.memory_search import MemorySearch
 from jarvis.orchestrator import Orchestrator
+from jarvis.persistent_memory import MemoryModule
 from jarvis.reasoning import Plan, ReasoningModule
 from jarvis.response_generator import ResponseGenerator
 from jarvis.retry_parsing import parse_retry_limit
@@ -73,6 +77,7 @@ class ChatSession:
         dual_execution_orchestrator: Optional[Any] = None,
         intent_classifier: Optional[IntentClassifier] = None,
         response_generator: Optional[ResponseGenerator] = None,
+        memory_module: Optional[MemoryModule] = None,
     ) -> None:
         """
         Initialize a chat session.
@@ -85,18 +90,29 @@ class ChatSession:
             dual_execution_orchestrator: Optional dual execution orchestrator for code execution
             intent_classifier: Optional intent classifier for distinguishing casual vs command
             response_generator: Optional response generator for conversational responses
+            memory_module: Optional memory module for persistent conversation and execution tracking
         """
         self.orchestrator = orchestrator
         self.reasoning_module = reasoning_module
         self.config = config
         self.controller = controller
         self.dual_execution_orchestrator = dual_execution_orchestrator
+        self.memory_module = memory_module
         self.history: List[ChatMessage] = []
         self.is_running = False
+        self.execution_history: List[ExecutionMemory] = []
 
         # Initialize intent classifier and response generator if not provided
         self.intent_classifier = intent_classifier or IntentClassifier()
         self.response_generator = response_generator or ResponseGenerator()
+
+        # Initialize memory search and reference resolver if memory module is available
+        if memory_module:
+            self.memory_search = MemorySearch()
+            self.reference_resolver = ReferenceResolver()
+        else:
+            self.memory_search = None
+            self.reference_resolver = None
 
     def add_message(
         self,
@@ -140,6 +156,132 @@ class ChatSession:
             context_lines.append(f"{msg.role}: {msg.content[:100]}")
 
         return "\n".join(context_lines)
+
+    def _build_context_from_memory(self, user_input: str) -> str:
+        """
+        Build context from memory for a given user input.
+
+        Args:
+            user_input: User's message
+
+        Returns:
+            Context string from memory
+        """
+        if not self.memory_module or not self.memory_search:
+            return ""
+
+        # Get recent conversations
+        recent_conversations = self.memory_module.get_recent_conversations(limit=5)
+
+        # Search for related past executions
+        recent_executions = self.memory_module.get_recent_executions(limit=10)
+        relevant_executions = self.memory_search.search_by_description(
+            user_input, recent_executions, limit=3
+        )
+
+        context_parts = []
+
+        # Add recent conversation context
+        if recent_conversations:
+            context_parts.append("Recent Context:")
+            recent_context = self.memory_search.get_recent_context(num_turns=3)
+            if recent_context:
+                context_parts.append(recent_context)
+
+        # Add relevant past executions
+        if relevant_executions:
+            context_parts.append("\n\nRelevant Past Executions:")
+            for exec_mem in relevant_executions:
+                context_parts.append(f"- {exec_mem.description}")
+                if exec_mem.file_locations:
+                    context_parts.append(f"  Files: {', '.join(exec_mem.file_locations)}")
+
+        return "\n".join(context_parts)
+
+    def _resolve_memory_reference(self, user_input: str) -> Optional[ExecutionMemory]:
+        """
+        Resolve user references to past executions.
+
+        Args:
+            user_input: User's message
+
+        Returns:
+            Referenced execution or None
+        """
+        if not self.memory_module or not self.reference_resolver:
+            return None
+
+        recent_executions = self.memory_module.get_recent_executions(limit=20)
+        return self.reference_resolver.resolve_reference(user_input, recent_executions)
+
+    def _handle_location_query(self, user_input: str) -> Optional[str]:
+        """
+        Handle user queries about file locations.
+
+        Args:
+            user_input: User's message
+
+        Returns:
+            Location information or None
+        """
+        if not self.memory_module:
+            return None
+
+        # Check for location query patterns
+        location_patterns = [
+            r"where\s+(?:is|are|did we save|was that saved)",
+            r"find\s+the\s+\w+",
+            r"locate\s+the\s+\w+",
+        ]
+
+        import re
+
+        for pattern in location_patterns:
+            if re.search(pattern, user_input.lower()):
+                # Extract what they're looking for
+                subject = self.reference_resolver.extract_subject(user_input) if self.reference_resolver else None
+                if subject:
+                    file_locations = self.memory_module.get_file_locations(subject)
+                    if file_locations:
+                        return f"Found {len(file_locations)} file(s) for '{subject}':\n" + "\n".join(
+                            f"  - {loc}" for loc in file_locations
+                        )
+
+        return None
+
+    def _save_to_memory(
+        self,
+        user_message: str,
+        assistant_response: str,
+        execution_history: List[ExecutionMemory] = None,
+    ) -> None:
+        """
+        Save conversation turn to memory.
+
+        Args:
+            user_message: User's message
+            assistant_response: Assistant's response
+            execution_history: List of executions performed
+        """
+        if not self.memory_module:
+            return
+
+        try:
+            # Extract context tags from the conversation
+            context_tags = []
+            if execution_history:
+                for exec_mem in execution_history:
+                    context_tags.extend(exec_mem.tags)
+
+            self.memory_module.save_conversation_turn(
+                user_message=user_message,
+                assistant_response=assistant_response,
+                execution_history=execution_history or [],
+                context_tags=context_tags,
+            )
+            logger.info("Saved conversation turn to memory")
+        except Exception as e:
+            logger.error(f"Failed to save conversation to memory: {e}")
 
     def _format_plan(self, plan: Plan) -> str:
         """
@@ -375,12 +517,33 @@ class ChatSession:
 
         max_attempts = parse_retry_limit(user_input)
 
+        # Check for location queries first
+        location_result = self._handle_location_query(user_input)
+        if location_result:
+            yield location_result
+            return
+
+        # Build context from memory
+        memory_context = self._build_context_from_memory(user_input)
+
+        # Check for memory references (e.g., "run that program")
+        referenced_execution = self._resolve_memory_reference(user_input)
+        if referenced_execution:
+            logger.info(f"Resolved memory reference: {referenced_execution.description}")
+            yield f"\n📍 Found reference to: {referenced_execution.description}\n"
+            if referenced_execution.file_locations:
+                yield f"📁 Files: {', '.join(referenced_execution.file_locations)}\n\n"
+
         context = self.get_context_summary()
+        if memory_context:
+            context += f"\n\n{memory_context}"
+
         self.add_message(
             "user", user_input, metadata={"context": context, "max_attempts": max_attempts}
         )
 
         full_response_parts = []
+        execution_history: List[ExecutionMemory] = []
 
         try:
             # First, check if this is a code execution request for dual execution orchestrator
@@ -527,11 +690,25 @@ class ChatSession:
             if self.history:
                 self.history[-1].content = full_response
 
+            # Save conversation to memory
+            self._save_to_memory(
+                user_message=user_input,
+                assistant_response=full_response,
+                execution_history=execution_history,
+            )
+
         except Exception as e:
             logger.exception(f"Error processing command: {e}")
             error_msg = f"Error: {str(e)}"
             self.add_message("assistant", error_msg, metadata={"error": str(e)})
             yield error_msg
+
+            # Save failed conversation to memory
+            self._save_to_memory(
+                user_message=user_input,
+                assistant_response=error_msg,
+                execution_history=execution_history,
+            )
 
     def run_interactive_loop(self) -> int:
         """

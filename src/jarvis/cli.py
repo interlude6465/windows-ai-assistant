@@ -165,12 +165,14 @@ def main(argv: Optional[list] = None) -> int:
             dual_execution_orchestrator = container.get_dual_execution_orchestrator(
                 config_path=args.config
             )
+            memory_module = container.get_memory_module(config_path=args.config)
             gui_app = create_gui_app(
                 orchestrator=orchestrator,
                 reasoning_module=reasoning_module,
                 config=config,
                 voice_callback=voice_callback,
                 dual_execution_orchestrator=dual_execution_orchestrator,
+                memory_module=memory_module,
             )
 
             # If voice is enabled, connect the voice output to the GUI input
@@ -188,25 +190,26 @@ def main(argv: Optional[list] = None) -> int:
             return gui_app.run()
 
         # Handle chat mode
-        if args.chat:
-            reasoning_module = container.get_reasoning_module(config_path=args.config)
-            dual_execution_orchestrator = container.get_dual_execution_orchestrator(
-                config_path=args.config
-            )
+        reasoning_module = container.get_reasoning_module(config_path=args.config)
+        dual_execution_orchestrator = container.get_dual_execution_orchestrator(
+            config_path=args.config
+        )
+        memory_module = container.get_memory_module(config_path=args.config)
 
-            # Initialize intent classifier and response generator for conversational responses
-            intent_classifier = IntentClassifier()
-            response_generator = ResponseGenerator()
+        # Initialize intent classifier and response generator for conversational responses
+        intent_classifier = IntentClassifier()
+        response_generator = ResponseGenerator()
 
-            chat_session = ChatSession(
-                orchestrator=orchestrator,
-                reasoning_module=reasoning_module,
-                config=config,
-                dual_execution_orchestrator=dual_execution_orchestrator,
-                intent_classifier=intent_classifier,
-                response_generator=response_generator,
-            )
-            return chat_session.run_interactive_loop()
+        chat_session = ChatSession(
+            orchestrator=orchestrator,
+            reasoning_module=reasoning_module,
+            config=config,
+            dual_execution_orchestrator=dual_execution_orchestrator,
+            intent_classifier=intent_classifier,
+            response_generator=response_generator,
+            memory_module=memory_module,
+        )
+        return chat_session.run_interactive_loop()
 
         # Handle command
         if not args.command:
