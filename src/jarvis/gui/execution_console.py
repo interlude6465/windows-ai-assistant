@@ -66,7 +66,6 @@ class ExecutionConsole(ctk.CTkFrame):
             text_color=self.INFO_COLOR,
             fg_color=("#1E1E1E", "#111111"),
             border_width=0,
-            highlightthickness=0,
         )
         self.console_text.pack(side="left", fill="both", expand=True)
         self.console_text.configure(yscrollcommand=self.scrollbar.set)

@@ -53,7 +53,7 @@ class SandboxViewer(ctk.CTkFrame):
 
         # State tracking
         self.is_visible = True
-        self.test_id_map: dict[str, int] = {}  # Map GUI test IDs to viewer IDs
+        self.test_id_map: dict[str, str] = {}  # Map test names to viewer test IDs
 
         # Timer for elapsed time
         self.timer_running = False

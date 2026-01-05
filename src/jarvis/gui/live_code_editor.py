@@ -110,7 +110,6 @@ class LiveCodeEditor(ctk.CTkFrame):
             text_color=self.DEFAULT_COLOR,
             fg_color=("#1E1E1E", "#111111"),
             border_width=0,
-            highlightthickness=0,
         )
         self.code_text.pack(side="left", fill="both", expand=True)
         self.code_text.configure(yscrollcommand=self.scrollbar.set)
