@@ -9,8 +9,26 @@ from jarvis.action_executor import ActionExecutor, ActionResult
 from jarvis.app import GUIApp, create_gui_app
 from jarvis.brain.server import BrainServer, BrainServerError
 from jarvis.chat import ChatMessage, ChatSession
-from jarvis.config import JarvisConfig, LLMConfig, SafetyConfig, StorageConfig, ExecutionConfig, OCRConfig
+from jarvis.code_cleaner import CodeCleaner
+from jarvis.config import (
+    JarvisConfig,
+    LLMConfig,
+    SafetyConfig,
+    StorageConfig,
+    ExecutionConfig,
+    OCRConfig,
+)
 from jarvis.container import Container
+from jarvis.conversation_context import ConversationContext, ConversationTurn
+from jarvis.execution_debugger import ExecutionDebugger
+from jarvis.interactive_executor import InteractiveExecutor
+from jarvis.interactive_program_analyzer import InteractiveProgramAnalyzer, ProgramType
+from jarvis.mistake_learner import LearningPattern, MistakeLearner
+from jarvis.output_validator import OutputValidator
+from jarvis.program_deployer import ProgramDeployer
+from jarvis.sandbox_execution_system import SandboxExecutionSystem
+from jarvis.sandbox_manager import SandboxManager, SandboxState, SandboxInfo
+from jarvis.test_case_generator import TestCaseGenerator
 from jarvis.config import (
     BrainLLMConfig,
     DualLLMConfig,
@@ -38,8 +56,12 @@ __all__ = [
     "BrainServerError",
     "ChatMessage",
     "ChatSession",
+    "CodeCleaner",
+    "ConversationContext",
+    "ConversationTurn",
     "Container",
     "ExecutionConfig",
+    "ExecutionDebugger",
     "create_gui_app",
     "GUIApp",
     "DocumentChunk",
@@ -51,23 +73,35 @@ __all__ = [
     "Controller",
     "ControllerResult",
     "Dispatcher",
+    "InteractiveExecutor",
+    "InteractiveProgramAnalyzer",
     "JarvisConfig",
     "LLMClient",
     "LLMConfig",
     "LLMConnectionError",
+    "LearningPattern",
+    "MistakeLearner",
     "OCRConfig",
     "Orchestrator",
+    "OutputValidator",
     "Plan",
     "PlanStep",
+    "ProgramDeployer",
+    "ProgramType",
     "RAGMemoryService",
     "ReasoningModule",
     "RetrievalResult",
     "SafetyConfig",
+    "SandboxExecutionSystem",
+    "SandboxInfo",
+    "SandboxManager",
+    "SandboxState",
     "SafetyFlag",
     "StepOutcome",
     "StepStatus",
     "StorageConfig",
     "SystemActionRouter",
+    "TestCaseGenerator",
     "ToolTeachingModule",
     "VoiceInterface",
 ]

@@ -4,11 +4,13 @@ Utility functions for Jarvis.
 
 import logging
 import re
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-def clean_code(code: str) -> str:
+# Enhanced code cleaning function that uses CodeCleaner class
+def clean_code(code: str, raise_on_empty: bool = True) -> str:
     """
     Strip markdown code formatting from generated code.
 
@@ -17,11 +19,17 @@ def clean_code(code: str) -> str:
 
     Args:
         code: Code string that may contain markdown formatting
+        raise_on_empty: Whether to raise ValueError if code is empty
 
     Returns:
         Cleaned code string without markdown formatting
+
+    Raises:
+        ValueError: If code is empty and raise_on_empty is True
     """
     if not code:
+        if raise_on_empty:
+            raise ValueError("Generated code is empty!")
         return ""
 
     text = code.strip()
@@ -45,7 +53,15 @@ def clean_code(code: str) -> str:
     text = re.sub(r"\s*```$", "", text)  # Remove closing ```
 
     # Clean up any remaining whitespace
-    return text.strip()
+    cleaned = text.strip()
+
+    # Detect empty code
+    if not cleaned or cleaned.isspace():
+        if raise_on_empty:
+            raise ValueError("Generated code is empty!")
+        return ""
+
+    return cleaned
 
 
 def truncate_text(text: str, max_length: int, suffix: str = "...") -> str:

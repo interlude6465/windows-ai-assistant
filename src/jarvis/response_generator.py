@@ -8,6 +8,7 @@ import logging
 import re
 from typing import Optional, Tuple
 
+from jarvis.conversation_context import ConversationContext
 from jarvis.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -21,14 +22,20 @@ class ResponseGenerator:
     For command intents: Generates summaries of what was executed
     """
 
-    def __init__(self, llm_client: Optional[LLMClient] = None) -> None:
+    def __init__(
+        self,
+        llm_client: Optional[LLMClient] = None,
+        conversation_memory: Optional[ConversationContext] = None,
+    ) -> None:
         """
         Initialize response generator.
 
         Args:
             llm_client: Optional LLM client for generating conversational responses
+            conversation_memory: Optional conversation memory for context-aware responses
         """
         self.llm_client = llm_client
+        self.conversation_memory = conversation_memory
         logger.info("ResponseGenerator initialized")
 
     def generate_response(self, intent: str, execution_result: str, original_input: str) -> str:
@@ -60,6 +67,15 @@ class ResponseGenerator:
         """
         logger.debug(f"Generating casual response for: {user_input}")
 
+        # Check for continuation requests if we have conversation memory
+        if self.conversation_memory and self.conversation_memory.detect_continuation_request(
+            user_input
+        ):
+            context = self.conversation_memory.get_continuation_context(user_input)
+            if context:
+                logger.debug("Continuation request detected")
+                return self._generate_continuation_response(user_input, context)
+
         # If no LLM client, provide simple rule-based responses
         if not self.llm_client:
             return self._get_simple_casual_response(user_input)
@@ -74,6 +90,43 @@ class ResponseGenerator:
         except Exception as e:
             logger.warning(f"Failed to generate LLM response: {e}")
             return self._get_simple_casual_response(user_input)
+
+    def _generate_continuation_response(self, user_input: str, context: dict) -> str:
+        """
+        Generate a response for a continuation request.
+
+        Args:
+            user_input: User's continuation request (e.g., "another one")
+            context: Previous conversation context
+
+        Returns:
+            Continuation response
+        """
+        prev_user = context.get("previous_user_message", "")
+        prev_task = context.get("previous_task_type", "")
+        prev_response = context.get("previous_response", "")
+
+        # For jokes, tell another joke
+        if "joke" in prev_user.lower():
+            return "Here's another one: What do you call a programmer in winter? Dll! 😄 Want another one?"
+
+        # For stories or facts, provide more content
+        if "tell me" in prev_user.lower() or "tell" in prev_user.lower():
+            if self.llm_client:
+                prompt = f"""The user said "{prev_user}" and I responded. Now they said "{user_input}".
+
+Continue naturally with more content related to the previous topic.
+Be brief (1-2 sentences) and engaging."""
+                try:
+                    response = self.llm_client.generate(prompt)
+                    return str(response).strip()
+                except Exception:
+                    pass
+
+            return "Sure! Would you like me to tell you something similar or move on to a different topic?"
+
+        # Default continuation
+        return "Here's another one! Let me know if you'd like more or something different."
 
     def _get_simple_casual_response(self, user_input: str) -> str:
         """
@@ -265,11 +318,16 @@ class ResponseGenerator:
         """Build a success summary response."""
         input_lower = original_input.lower()
 
+        # Extract program type from execution result if available
+        program_type = self._extract_program_type(execution_result)
+
         # File operations
         if any(word in input_lower for word in ["create", "write", "make", "generated", "built"]):
             if "file" in input_lower:
                 return "Done! I've successfully created the file for you."
             elif "code" in input_lower or "script" in input_lower or "program" in input_lower:
+                if program_type:
+                    return f"✅ Finished creating {program_type}. Saved to your file system."
                 return "Done! I've generated the code and executed it successfully."
 
         # Execution operations
@@ -278,6 +336,37 @@ class ResponseGenerator:
 
         # Default success message
         return "Done! I've completed your request successfully."
+
+    def _extract_program_type(self, execution_result: str) -> Optional[str]:
+        """
+        Extract program type from execution result.
+
+        Args:
+            execution_result: Execution result string
+
+        Returns:
+            Program type string or None
+        """
+        # Look for program type in execution result
+        result_lower = execution_result.lower()
+
+        program_types = [
+            "calculator",
+            "game",
+            "quiz",
+            "todo app",
+            "converter",
+            "generator",
+            "notepad",
+            "chatbot",
+            "utility",
+        ]
+
+        for ptype in program_types:
+            if ptype in result_lower:
+                return ptype
+
+        return None
 
     def _build_error_summary(self, original_input: str, execution_result: str) -> str:
         """Build an error summary response."""
