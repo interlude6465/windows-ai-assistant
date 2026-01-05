@@ -54,7 +54,8 @@ class FailureDiagnosis(BaseModel):
     suggested_fix: str = Field(description="Suggested fix")
     fix_strategy: str = Field(
         description=(
-            "Fix strategy: regenerate_code, add_retry_logic, " "install_package, adjust_parameters"
+            "Fix strategy: regenerate_code, add_retry_logic, stdlib_fallback, "
+            "install_package, adjust_parameters, manual"
         )
     )
     confidence: float = Field(default=0.7, description="Confidence in diagnosis (0.0-1.0)")

@@ -165,32 +165,37 @@ class AdaptiveFixEngine:
         step_number: int,
         error_type: str,
         retry_count: int,
+        fix_strategy: str,
         max_retries: Optional[int] = None,
     ) -> bool:
         """Determine if we should abort retry attempts.
 
-        If max_retries is None, retries are unlimited and this returns False.
+        Always tracks repeated errors to prevent infinite loops, even when max_retries is None.
         """
-
-        effective_max = self.default_max_retries if max_retries is None else max_retries
-        if effective_max is None:
-            return False
-
-        # Abort if retry count exceeds max
-        if retry_count >= effective_max:
-            logger.warning(f"Max retries ({effective_max}) exceeded for step {step_number}")
-            return True
-
-        # Track repeated errors (only in bounded mode)
+        # Track repeated errors regardless of max_retries
         key = f"{step_number}:{error_type}"
         if key not in self.retry_history:
             self.retry_history[key] = {"count": 0, "last_fix_strategy": None}
 
         self.retry_history[key]["count"] += 1
+        self.retry_history[key]["last_fix_strategy"] = fix_strategy
 
         # Abort if same error repeats 3+ times
         if self.retry_history[key]["count"] >= 3:
-            logger.warning(f"Same error ({error_type}) repeated 3+ times on step {step_number}")
+            logger.warning(
+                f"Same error ({error_type}) repeated 3+ times on step {step_number}, aborting"
+            )
+            return True
+
+        # Hard limit: never exceed 25 retries even if max_retries is None
+        if retry_count >= 25:
+            logger.warning(f"Hard limit of 25 retries exceeded for step {step_number}")
+            return True
+
+        # Check user-specified max_retries if provided
+        effective_max = self.default_max_retries if max_retries is None else max_retries
+        if effective_max is not None and retry_count >= effective_max:
+            logger.warning(f"Max retries ({effective_max}) exceeded for step {step_number}")
             return True
 
         return False
@@ -218,6 +223,7 @@ class AdaptiveFixEngine:
             "add_documentation",
             "refactor_logic",
             "add_comments",
+            "stdlib_fallback",
             "install_package",
         ]
 
@@ -420,16 +426,22 @@ Provide your diagnosis in this JSON format:
   "root_cause": "Clear explanation of what went wrong",
   "suggested_fix": "Specific fix to apply",
   "fix_strategy": "one of: regenerate_code, add_retry_logic, "
-                 "install_package, adjust_parameters, or manual",
+                  "stdlib_fallback, install_package, adjust_parameters, or manual",
   "confidence": 0.0 to 1.0
 }}
 
 Common fix strategies:
 - regenerate_code: Rewrite the code to fix bugs
 - add_retry_logic: Add retry logic with backoff
-- install_package: Install missing dependencies
+- stdlib_fallback: Rewrite using only Python standard library (preferred for simple tasks)
+- install_package: Install missing dependencies (only for complex tasks requiring external packages)
 - adjust_parameters: Change parameters or configuration
 - manual: Requires human intervention
+
+IMPORTANT:
+- For simple tasks (calculators, basic scripts), prefer stdlib_fallback over install_package
+- Only use install_package strategy for genuinely complex requirements
+- Python has built-in eval(), math, re, os, sys, json, subprocess - use these first
 
 Return only valid JSON, no other text."""
         return prompt
@@ -438,6 +450,17 @@ Return only valid JSON, no other text."""
         self, step: CodeStep, diagnosis: FailureDiagnosis, retry_count: int
     ) -> str:
         """Build prompt for generating fixed code."""
+        # Add stdlib-only requirement for ImportError cases
+        stdlib_requirement = ""
+        if diagnosis.fix_strategy == "stdlib_fallback" or "ImportError" in diagnosis.error_type:
+            stdlib_requirement = """
+
+CRITICAL: Use ONLY Python standard library modules (no external packages like asteval,
+numpy, pandas, etc.).
+For simple tasks like calculators, use built-in functions like eval() with proper validation.
+Use built-in modules like re, math, os, sys, json, subprocess, etc. but NO external
+dependencies."""
+
         prompt = f"""Generate fixed code for this failed step.
 
 Step Description: {step.description}
@@ -450,7 +473,7 @@ Original Code:
 Diagnosis:
 - Root Cause: {diagnosis.root_cause}
 - Suggested Fix: {diagnosis.suggested_fix}
-- Fix Strategy: {diagnosis.fix_strategy}
+- Fix Strategy: {diagnosis.fix_strategy}{stdlib_requirement}
 
 This is retry attempt {retry_count + 1}.
 
@@ -461,6 +484,7 @@ Requirements:
 4. Make the code more robust
 5. Return only the code, no explanations or markdown formatting
 6. Ensure the code is complete and executable
+7. For simple tasks (calculators, basic scripts), use stdlib-only solutions
 
 Return only the fixed code, no other text."""
         return prompt

@@ -15,7 +15,6 @@ from jarvis.execution_models import CodeStep, ExecutionMode
 from jarvis.execution_monitor import ExecutionMonitor
 from jarvis.execution_router import ExecutionRouter
 from jarvis.llm_client import LLMClient
-from jarvis.memory_models import ExecutionMemory
 from jarvis.mistake_learner import MistakeLearner
 from jarvis.persistent_memory import MemoryModule
 from jarvis.retry_parsing import format_attempt_progress, parse_retry_limit
@@ -165,11 +164,6 @@ class DualExecutionOrchestrator:
 
                         yield f"   ❌ Error detected in step {step.step_number} ({progress})\n"
 
-                        if max_attempts is not None and attempt >= max_attempts:
-                            step.status = "failed"
-                            yield f"   ❌ Max retries ({max_attempts}) exceeded, aborting\n\n"
-                            break
-
                         # Parse error
                         error_type, error_details = self.execution_monitor.parse_error_from_output(
                             error_output or full_output
@@ -182,6 +176,31 @@ class DualExecutionOrchestrator:
                         )
                         yield f"   Root cause: {diagnosis.root_cause}\n"
                         yield f"   🔧 Fixing: {diagnosis.suggested_fix}\n"
+
+                        # Check if we should abort due to repeated failures
+                        if self.adaptive_fix_engine.should_abort_retry(
+                            step.step_number,
+                            error_type,
+                            attempt,
+                            diagnosis.fix_strategy,
+                            max_attempts,
+                        ):
+                            step.status = "failed"
+                            yield "   ❌ Aborting due to repeated failures or retry limit\n\n"
+                            break
+
+                        # For ImportError on external packages, prefer stdlib fallback
+                        if (
+                            error_type == "ImportError"
+                            and diagnosis.fix_strategy == "install_package"
+                        ):
+                            yield (
+                                "   ⚠️  Import error detected - will try stdlib-only "
+                                "solution instead of external package\n"
+                            )
+                            # Override fix strategy to regenerate code with stdlib only
+                            diagnosis.fix_strategy = "stdlib_fallback"
+                            diagnosis.suggested_fix = "Rewrite using only Python standard library"
 
                         yield "   Applying fix...\n"
                         fixed_code = self.adaptive_fix_engine.generate_fix(

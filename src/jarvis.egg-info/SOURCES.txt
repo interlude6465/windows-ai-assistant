@@ -11,6 +11,7 @@ src/jarvis/cli.py
 src/jarvis/code_step_breakdown.py
 src/jarvis/config.py
 src/jarvis/container.py
+src/jarvis/conversation_backend.py
 src/jarvis/direct_executor.py
 src/jarvis/document_parser.py
 src/jarvis/dual_execution_orchestrator.py
@@ -25,6 +26,9 @@ src/jarvis/learn_cli.py
 src/jarvis/llm_client.py
 src/jarvis/logging_config.py
 src/jarvis/memory.py
+src/jarvis/memory_models.py
+src/jarvis/memory_reference_resolver.py
+src/jarvis/memory_search.py
 src/jarvis/mistake_learner.py
 src/jarvis/orchestrator.py
 src/jarvis/persistent_memory.py
