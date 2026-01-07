@@ -156,10 +156,18 @@ class CodeStepBreakdown:
 {user_request}
 
 Requirements:
-1. Identify all necessary steps (setup, implementation, testing, etc.)
-2. Specify dependencies between steps
-3. For steps that require code execution, describe what the code should do
-4. For informational steps (like "prepare", "format"), mark them accordingly
+1. Create FOCUSED, SUBSTANTIAL steps (maximum 4 steps for complex tasks)
+2. Each step should accomplish something meaningful
+3. Avoid trivial setup-only steps (like "install package" or "import library")
+4. Combine related operations into single steps
+5. For steps that require code execution, describe what the code should do
+6. For informational steps (like "prepare", "format"), mark them accordingly
+
+Guidelines for reducing steps:
+- If installing libraries, do it in the code itself (try/except ImportError)
+- Don't separate "prepare URL" from "fetch data"
+- Combine validation into execution steps
+- Error handling should be part of main code, not separate steps
 
 Respond with valid JSON:
 {{
@@ -180,11 +188,14 @@ Respond with valid JSON:
 
 Notes:
 - Steps should be in logical order
+- MAXIMUM 4 steps for complex tasks
+- Each step should be substantial (not just "prepare" or "setup")
 - Dependencies should reference earlier step numbers only
 - Informational steps (prepare, format, reply) should have is_code_execution=false
 - Code steps should have is_code_execution=true
 - max_retries can be a number or null (null means unlimited retries)
 - Keep descriptions clear and actionable
+- Example: Web scraper should be 2-3 steps (fetch + process + save), not 7
 
 Return only valid JSON, no other text."""
         return prompt

@@ -5,7 +5,6 @@ Handles DIRECT mode requests: generate code, write to file, execute immediately.
 """
 
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -40,6 +39,7 @@ class DirectExecutor:
         llm_client: LLMClient,
         mistake_learner: Optional[MistakeLearner] = None,
         memory_module: Optional[MemoryModule] = None,
+        gui_callback: Optional[callable] = None,
     ) -> None:
         """
         Initialize direct executor.
@@ -48,12 +48,28 @@ class DirectExecutor:
             llm_client: LLM client for code generation
             mistake_learner: Mistake learner for storing and retrieving patterns
             memory_module: Optional memory module for tracking executions
+            gui_callback: Optional callback for sandbox viewer updates
         """
         self.llm_client = llm_client
         self.mistake_learner = mistake_learner or MistakeLearner()
         self.memory_module = memory_module
+        self.gui_callback = gui_callback
         self._execution_history: list[ExecutionMemory] = []
         logger.info("DirectExecutor initialized")
+
+    def _emit_gui_event(self, event_type: str, data: dict) -> None:
+        """
+        Emit an event to the GUI callback (sandbox viewer).
+
+        Args:
+            event_type: Type of event
+            data: Event data dictionary
+        """
+        if self.gui_callback:
+            try:
+                self.gui_callback(event_type, data)
+            except Exception as e:
+                logger.debug(f"GUI callback error: {e}")
 
     def generate_code(self, user_request: str, language: str = "python") -> str:
         """
@@ -67,6 +83,9 @@ class DirectExecutor:
             Generated code as string
         """
         logger.info(f"Generating {language} code for: {user_request}")
+
+        # Emit code generation started event
+        self._emit_gui_event("code_generation_started", {})
 
         # Detect desktop save request
         save_to_desktop = self._detect_desktop_save_request(user_request)
@@ -91,9 +110,15 @@ class DirectExecutor:
                 cleaned_code = self._modify_for_desktop_save(cleaned_code, user_request)
 
             logger.debug(f"Generated {len(cleaned_code)} characters of {language} code")
+
+            # Emit code generated event to sandbox viewer
+            self._emit_gui_event("code_generated", {"code": cleaned_code})
+            self._emit_gui_event("code_generation_complete", {})
+
             return str(cleaned_code)
         except Exception as e:
             logger.error(f"Failed to generate code: {e}")
+            self._emit_gui_event("error_occurred", {"error": str(e)})
             raise
 
     def write_execution_script(
@@ -145,21 +170,17 @@ class DirectExecutor:
         """
         Save generated code to Desktop with timestamp.
 
+        IMPORTANT: Saves the actual Python code, not execution output.
+
         Args:
-            code: Code content to save
+            code: Code content to save (actual Python code)
             user_request: Original user request (for generating filename)
             script_path: Optional existing script path to copy from
 
         Returns:
             Path to the saved file on Desktop
         """
-        from jarvis.prompt_injector import PromptInjector
-
-        # Inject prompts for interactive programs
-        injector = PromptInjector()
-        code_with_prompts = injector.inject_prompts(code)
-
-        # Generate filename from user request
+        # Generate filename from user request (with safe timestamp)
         desktop = Path.home() / "Desktop"
         filename = self._generate_safe_filename(user_request) + ".py"
         file_path = desktop / filename
@@ -172,10 +193,10 @@ class DirectExecutor:
                 shutil.copy2(script_path, file_path)
                 logger.info(f"Copied script to Desktop: {file_path}")
             else:
-                # Write code directly
+                # Write actual Python code directly (NOT code_with_prompts, NOT execution output)
                 with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(code_with_prompts)
-                logger.info(f"Saved code to Desktop: {file_path}")
+                    f.write(code)
+                logger.info(f"Saved Python code to Desktop: {file_path}")
 
             return file_path
         except Exception as e:
@@ -183,7 +204,7 @@ class DirectExecutor:
             # Fallback to temp directory
             fallback_path = Path(tempfile.gettempdir()) / filename
             with open(fallback_path, "w", encoding="utf-8") as f:
-                f.write(code_with_prompts)
+                f.write(code)
             logger.info(f"Saved to temp instead: {fallback_path}")
             return fallback_path
 
@@ -437,25 +458,34 @@ class DirectExecutor:
                 # Execute with input support for interactive programs
                 yield f"▶️ Executing script... ({progress})\n"
 
+                # Emit deployment started event to sandbox viewer
+                self._emit_gui_event("deployment_started", {"file_path": str(desktop_path)})
+
                 # Track execution output and exit code
                 combined_output = ""
                 exit_code = 0
 
                 if has_interactive:
-                    yield f"   🚀 Running with auto-generated test inputs\n\n"
+                    yield "   🚀 Running with auto-generated test inputs\n\n"
                     # Execute with input support - this returns (exit_code, output)
                     exit_code, exec_output = self._run_script_with_input_support(
                         script_path, timeout
                     )
-                    # Yield output line by line
+                    # Yield output line by line and emit to sandbox viewer
                     for line in exec_output.splitlines(keepends=True):
                         yield line
                         combined_output += line
+                        # Emit execution line event to sandbox viewer
+                        if line.strip():
+                            self._emit_gui_event("execution_line", {"line": line})
                 else:
                     # Use regular execution
                     for line in self.stream_execution(script_path, timeout):
                         yield line
                         combined_output += line
+                        # Emit execution line event to sandbox viewer
+                        if line.strip():
+                            self._emit_gui_event("execution_line", {"line": line})
                     # Get exit code
                     exit_code, _ = self._run_script_capture(script_path, timeout)
 
@@ -472,9 +502,11 @@ class DirectExecutor:
                                 user_request=user_request,
                                 description=self._generate_description(user_request, code),
                                 code_generated=code,
-                                file_locations=[str(script_path), str(desktop_path)]
-                                if desktop_path
-                                else [str(script_path)],
+                                file_locations=(
+                                    [str(script_path), str(desktop_path)]
+                                    if desktop_path
+                                    else [str(script_path)]
+                                ),
                                 output=combined_output,
                                 success=True,
                                 tags=["python", "direct_execution"],
@@ -534,9 +566,7 @@ class DirectExecutor:
         except subprocess.TimeoutExpired:
             return 124, f"Execution timed out after {timeout} seconds"
 
-    def _run_script_with_input_support(
-        self, script_path: Path, timeout: int
-    ) -> tuple[int, str]:
+    def _run_script_with_input_support(self, script_path: Path, timeout: int) -> tuple[int, str]:
         """
         Run a script with stdin support for interactive programs.
 
@@ -688,7 +718,10 @@ Requirements:
 - Add comments explaining the code
 - Make it production-ready
 - No extra text or explanations, just code
--- No markdown formatting, no explanations."""
+- IMPORTANT: For interactive programs, use input() and print(), NOT Tkinter dialogs
+- AVOID: simpledialog.askstring, simpledialog.askfloat, simpledialog.askinteger, tkinter.filedialog
+- Use CLI-based input() instead: input("Enter value: ")
+- No markdown formatting, no explanations."""
 
         # Inject learned patterns
         if learned_patterns:

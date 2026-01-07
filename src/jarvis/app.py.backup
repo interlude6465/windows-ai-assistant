@@ -274,16 +274,6 @@ class GUIApp(customtkinter.CTk):
         if self._processing:
             return
 
-        # Display user message in chat BEFORE processing
-        def show_user_message():
-            self.chat_text.configure(state="normal")
-            self.chat_text.insert("end", f"[User] {command}\n", "user_message")
-            self.chat_text.insert("end", "\n")
-            self.chat_text.tag_configure("user_message", foreground="#1E90FF")
-            self.chat_text.see("end")
-            self.chat_text.configure(state="disabled")
-
-        self._run_on_ui_thread(show_user_message)
         self._processing = True
         self._current_command = command
         self.send_button.configure(state="disabled")

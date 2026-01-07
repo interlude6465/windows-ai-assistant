@@ -9,7 +9,6 @@ import logging
 import re
 import subprocess
 import sys
-from pathlib import Path
 from typing import Generator, List, Optional, Tuple
 
 from jarvis.execution_models import CodeStep
@@ -52,7 +51,31 @@ class ExecutionMonitor:
 
     def __init__(self) -> None:
         """Initialize the execution monitor."""
+        self.gui_callback = None
         logger.info("ExecutionMonitor initialized")
+
+    def set_gui_callback(self, gui_callback: Optional[callable] = None) -> None:
+        """
+        Set the GUI callback for sandbox viewer updates.
+
+        Args:
+            gui_callback: Optional callback function
+        """
+        self.gui_callback = gui_callback
+
+    def _emit_gui_event(self, event_type: str, data: dict) -> None:
+        """
+        Emit an event to the GUI callback (sandbox viewer).
+
+        Args:
+            event_type: Type of event
+            data: Event data dictionary
+        """
+        if self.gui_callback:
+            try:
+                self.gui_callback(event_type, data)
+            except Exception as e:
+                logger.debug(f"GUI callback error: {e}")
 
     def stream_subprocess_output(
         self,
@@ -239,6 +262,9 @@ class ExecutionMonitor:
         logger.info(f"Executing step {step.step_number}: {step.description}")
 
         if step.code:
+            # Emit code generation event to sandbox viewer
+            self._emit_gui_event("code_generated", {"code": step.code})
+
             # Execute code (write to temp file and run)
             import os
             import tempfile
@@ -261,15 +287,15 @@ class ExecutionMonitor:
             try:
                 if has_interactive:
                     # Execute with stdin support for interactive programs
-                    yield from self._execute_with_input_support(
-                        temp_file, timeout, prompts
-                    )
+                    yield from self._execute_with_input_support(temp_file, timeout, prompts)
                 else:
                     # Execute shell command
                     command = [sys.executable, temp_file]
                     for line, source, is_error in self.stream_subprocess_output(
                         command, timeout=timeout
                     ):
+                        # Emit execution line to sandbox viewer
+                        self._emit_gui_event("execution_line", {"line": line})
                         yield (line, is_error, None)
             finally:
                 # Clean up temp file
@@ -340,6 +366,8 @@ class ExecutionMonitor:
 
                 if line:
                     is_error = self._is_error_line(line)
+                    # Emit execution line to sandbox viewer
+                    self._emit_gui_event("execution_line", {"line": line})
                     yield (line, is_error, None)
                     logger.debug(f"stdout: {line.rstrip()}")
 

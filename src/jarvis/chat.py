@@ -415,8 +415,19 @@ class ChatSession:
                 except (TypeError, ValueError):
                     result_str = str(execution_result)
 
-            # Generate appropriate response
-            response = self.response_generator.generate_response(intent, result_str, user_input)
+            # Check for location queries first (memory context)
+            location_result = self._handle_location_query(user_input)
+            if location_result:
+                # Use location result directly as memory context
+                memory_context = location_result
+            else:
+                # Build context from memory for general responses
+                memory_context = self._build_context_from_memory(user_input)
+
+            # Generate appropriate response with memory context
+            response = self.response_generator.generate_response(
+                intent, result_str, user_input, memory_context
+            )
             return str(response)
 
         except Exception as e:

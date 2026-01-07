@@ -37,6 +37,7 @@ class DualExecutionOrchestrator:
         llm_client: LLMClient,
         mistake_learner: Optional[MistakeLearner] = None,
         memory_module: Optional[MemoryModule] = None,
+        gui_callback: Optional[callable] = None,
     ) -> None:
         """
         Initialize dual execution orchestrator.
@@ -45,14 +46,19 @@ class DualExecutionOrchestrator:
             llm_client: LLM client for code generation and analysis
             mistake_learner: Mistake learner for storing and retrieving patterns
             memory_module: Optional memory module for tracking executions
+            gui_callback: Optional callback for sandbox viewer updates
         """
         self.llm_client = llm_client
         self.mistake_learner = mistake_learner or MistakeLearner()
         self.memory_module = memory_module
+        self.gui_callback = gui_callback
         self.router = ExecutionRouter()
-        self.direct_executor = DirectExecutor(llm_client, self.mistake_learner, memory_module)
+        self.direct_executor = DirectExecutor(
+            llm_client, self.mistake_learner, memory_module, gui_callback
+        )
         self.code_step_breakdown = CodeStepBreakdown(llm_client)
         self.execution_monitor = ExecutionMonitor()
+        self.execution_monitor.set_gui_callback(gui_callback)
         self.adaptive_fix_engine = AdaptiveFixEngine(llm_client, self.mistake_learner)
         logger.info("DualExecutionOrchestrator initialized")
 
@@ -262,6 +268,9 @@ Requirements:
 - Add comments explaining the code
 - Make it production-ready
 - No extra text or explanations, just the code
+- IMPORTANT: For interactive programs, use input() and print(), NOT Tkinter dialogs
+- AVOID: simpledialog.askstring, simpledialog.askfloat, simpledialog.askinteger, tkinter.filedialog
+- Use CLI-based input() instead: input("Enter value: ")
 
 Return only the code, no markdown formatting, no explanations."""
 
