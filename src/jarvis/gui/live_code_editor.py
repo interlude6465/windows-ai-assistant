@@ -6,6 +6,7 @@ import logging
 import re
 
 import customtkinter as ctk
+import tkinter as tk
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +105,15 @@ class LiveCodeEditor(ctk.CTkFrame):
         self.scrollbar = ctk.CTkScrollbar(self.text_frame)
         self.scrollbar.pack(side="right", fill="y")
 
-        self.code_text = ctk.CTkTextbox(
+        # Use standard tk.Text instead of CTkTextbox to support tags for syntax highlighting
+        self.code_text = tk.Text(
             self.text_frame,
             font=("Consolas", 12),
-            text_color=self.DEFAULT_COLOR,
-            fg_color=("#1E1E1E", "#111111"),
-            border_width=0,
+            foreground=self.DEFAULT_COLOR,
+            background="#1E1E1E",
+            insertbackground="white",
+            borderwidth=0,
+            highlightthickness=0,
         )
         self.code_text.pack(side="left", fill="both", expand=True)
         self.code_text.configure(yscrollcommand=self.scrollbar.set)
