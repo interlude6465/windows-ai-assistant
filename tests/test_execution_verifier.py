@@ -1,19 +1,16 @@
 # Tests for execution verifier and fallback strategies modules.
 
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
-
-import pytest
+from unittest.mock import patch
 
 # Import from our modules, handling optional dependencies
 import spectral.execution_verifier as ev_module
-from spectral.action_executor import ActionResult
 
 # Set psutil as unavailable for testing
 ev_module.PSUTIL_AVAILABLE = False
 ev_module.psutil = None
 
-from spectral.action_fallback_strategies import (
+from spectral.action_executor import ActionResult  # noqa: E402
+from spectral.action_fallback_strategies import (  # noqa: E402
     ApplicationFallbackStrategy,
     ExecutionReport,
     InputFallbackStrategy,
@@ -21,7 +18,7 @@ from spectral.action_fallback_strategies import (
     RetryAttempt,
     StrategyExecutor,
 )
-from spectral.execution_verifier import (
+from spectral.execution_verifier import (  # noqa: E402
     ApplicationVerifier,
     DiagnosticsCollector,
     ExecutionVerifier,

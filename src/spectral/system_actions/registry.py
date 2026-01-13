@@ -6,7 +6,7 @@ dry-run semantics and safety checks.
 """
 
 import logging
-from typing import Any, List, Optional, Union
+from typing import Any
 
 try:
     import winreg
@@ -369,7 +369,10 @@ class RegistryActions:
             return ActionResult(
                 success=True,
                 action_type="write_value",
-                message=f"[DRY-RUN] Would write value {root_key}\\{subkey_path}\\{value_name} = {repr(value)}",
+                message=(
+                    f"[DRY-RUN] Would write value {root_key}\\{subkey_path}\\{value_name} = "
+                    f"{repr(value)}"
+                ),
                 data={
                     "root_key": root_key,
                     "subkey_path": subkey_path,

@@ -5,7 +5,7 @@ Utility functions for Spectral.
 import ast
 import logging
 import re
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 

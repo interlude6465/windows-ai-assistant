@@ -93,7 +93,7 @@ class TestChatSession:
 
     def test_add_message(self, chat_session: ChatSession) -> None:
         """Test adding messages to chat history."""
-        msg = chat_session.add_message("user", "Hello")
+        _ = chat_session.add_message("user", "Hello")
         assert len(chat_session.history) == 1
         assert chat_session.history[0].role == "user"
         assert chat_session.history[0].content == "Hello"
@@ -233,7 +233,7 @@ class TestChatSession:
         """Test processing a command successfully."""
         chat_session.reasoning_module = mock_reasoning_module
 
-        response = chat_session.process_command("Hello Spectral")
+        _ = chat_session.process_command("Hello Spectral")
 
         assert len(chat_session.history) == 2  # user + assistant
         assert chat_session.history[0].role == "user"
@@ -241,7 +241,7 @@ class TestChatSession:
 
     def test_process_command_without_reasoning_module(self, chat_session: ChatSession) -> None:
         """Test processing command without reasoning module."""
-        response = chat_session.process_command("Test command")
+        _ = chat_session.process_command("Test command")
 
         assert len(chat_session.history) == 2
         assert chat_session.history[0].role == "user"

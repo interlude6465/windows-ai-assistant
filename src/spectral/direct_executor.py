@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Callable, Generator, Optional
 
 from spectral.gui_test_generator import GUITestGenerator
 from spectral.llm_client import LLMClient
@@ -41,7 +41,7 @@ class DirectExecutor:
         llm_client: LLMClient,
         mistake_learner: Optional[MistakeLearner] = None,
         memory_module: Optional[MemoryModule] = None,
-        gui_callback: Optional[callable] = None,
+        gui_callback: Optional[Callable[[str, dict], None]] = None,
     ) -> None:
         """
         Initialize direct executor.
@@ -867,13 +867,13 @@ Requirements:
 - Make it production-ready
 - No extra text or explanations, just code
 - IMPORTANT: For interactive programs, use input() and print(), NOT Tkinter dialogs
-- AVOID: simpledialog.askstring, simpledialog.askfloat, simpledialog.askinteger, tkinter.filedialog
+- AVOID: simpledialog.askstring, simpledialog.askfloat, simpledialog.askinteger
 - Use CLI-based input() instead: input("Enter value: ")
-- IMPORTANT (GUI programs): if you use tkinter/pygame/PyQt/kivy, structure the code to be headless-testable:
+- IMPORTANT (GUI programs): if you use tkinter/pygame/PyQt/kivy, structure:
   - Do NOT create or show any GUI windows at import time
   - Put main loop / window launch code under if __name__ == "__main__":
-  - Encapsulate state + event handlers in a class with methods that can be called programmatically
-  - Keep UI construction separate from core game/app logic so tests can verify state changes without a display
+  - Encapsulate state + event handlers in a class
+  - Keep UI separate from core logic so tests can verify state changes
 - No markdown formatting, no explanations."""
 
         # Inject learned patterns

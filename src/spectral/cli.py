@@ -8,15 +8,12 @@ and routing them through the orchestrator.
 import argparse
 import logging
 import sys
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from spectral.chat import ChatSession
 from spectral.container import Container
 from spectral.intent_classifier import IntentClassifier
 from spectral.response_generator import ResponseGenerator
-
-if TYPE_CHECKING:
-    from spectral.voice import VoiceInterface
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +131,8 @@ def main(argv: Optional[list] = None) -> int:
             except ImportError:
                 logger.error("CustomTkinter not installed. Install with: pip install customtkinter")
                 print(
-                    "Error: GUI mode requires CustomTkinter. Install with: pip install customtkinter",
+                    "Error: GUI mode requires CustomTkinter. "
+                    "Install with: pip install customtkinter",
                     file=sys.stderr,
                 )
                 return 1
@@ -146,20 +144,22 @@ def main(argv: Optional[list] = None) -> int:
             from spectral.voice import VoiceInterface
 
             # Setup voice interface if requested
-            voice_interface: Optional["VoiceInterface"] = None
+            voice_interface: Optional[VoiceInterface] = None
             voice_callback = None
 
             if args.voice:
-                from spectral.voice import VoiceInterface as VI
-
                 logger.info("Initializing voice interface")
-                voice_interface = VI(
+                voice_interface = VoiceInterface(
                     wakeword="spectral",
                     on_command=lambda cmd: logger.info(f"Voice command: {cmd}"),
                     on_error=lambda err: logger.error(f"Voice error: {err}"),
                 )
-                # Voice callback will be set in GUI
-                voice_callback = lambda: (voice_interface.start() if voice_interface else None)
+
+                def _start_voice() -> None:
+                    if voice_interface:
+                        voice_interface.start()
+
+                voice_callback = _start_voice
 
             # Create and run GUI
             dual_execution_orchestrator = container.get_dual_execution_orchestrator(
@@ -189,7 +189,18 @@ def main(argv: Optional[list] = None) -> int:
 
             return gui_app.run()
 
-        # Handle chat mode
+        # Handle normal command execution
+        if args.command and not args.chat:
+            result = orchestrator.handle_command(args.command)
+            logger.info(f"Result: {result['message']}")
+            return 0
+
+        # If no command was provided, print help unless chat was requested.
+        if not args.command and not args.chat:
+            parser.print_help()
+            return 0
+
+        # Handle interactive chat mode
         reasoning_module = container.get_reasoning_module(config_path=args.config)
         dual_execution_orchestrator = container.get_dual_execution_orchestrator(
             config_path=args.config
@@ -210,17 +221,6 @@ def main(argv: Optional[list] = None) -> int:
             memory_module=memory_module,
         )
         return chat_session.run_interactive_loop()
-
-        # Handle command
-        if not args.command:
-            parser.print_help()
-            return 0
-
-        result = orchestrator.handle_command(args.command)
-
-        # Output result
-        logger.info(f"Result: {result['message']}")
-        return 0
 
     except Exception as e:
         logger.exception(f"Error executing command: {e}")

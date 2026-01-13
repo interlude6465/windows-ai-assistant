@@ -1,7 +1,7 @@
 """Tests for the controller module."""
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,7 +16,7 @@ from spectral.controller import (
 )
 from spectral.controller.brain_server import BrainServer
 from spectral.memory import MemoryStore
-from spectral.reasoning import Plan, PlanStep, PlanValidationResult, ReasoningModule
+from spectral.reasoning import Plan, PlanStep, ReasoningModule
 
 
 class TestBrainServer:
@@ -65,12 +65,11 @@ class TestBrainServer:
         server = BrainServer(mock_reasoning_module)
 
         chunks = []
-        result = None
 
         gen = server.plan_stream("test command")
         for chunk in gen:
             chunks.append(chunk)
-        result = next(gen, None)
+        _ = next(gen, None)
 
         # Should have multiple chunks of output
         assert len(chunks) > 0
@@ -151,12 +150,11 @@ class TestExecutorServer:
         )
 
         chunks = []
-        result_dict = {}
 
         gen = server.execute_step_stream(step)
         for chunk in gen:
             chunks.append(chunk)
-        result_dict = next(gen, {})
+        _ = next(gen, {})
 
         assert len(chunks) > 0
         assert any("Executing" in chunk for chunk in chunks)
@@ -482,12 +480,11 @@ class TestController:
         controller = Controller(mock_reasoning_module, mock_action_executor)
 
         chunks = []
-        result = None
 
         gen = controller.process_command_stream("test command")
         for chunk in gen:
             chunks.append(chunk)
-        result = next(gen, None)
+        _ = next(gen, None)
 
         # Should have output
         assert len(chunks) > 0
@@ -521,7 +518,7 @@ class TestController:
 
         controller.subscribe_to_step_events(callback)
 
-        result = controller.process_command("test command")
+        _ = controller.process_command("test command")
 
         controller.unsubscribe_from_step_events(callback)
 

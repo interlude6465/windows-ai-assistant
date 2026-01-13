@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from spectral.cli import create_parser, main
 
 
@@ -144,7 +142,7 @@ class TestMain:
         }
         mock_container.get_orchestrator.return_value = mock_orchestrator
 
-        with patch("spectral.cli.logging") as mock_logging:
+        with patch("spectral.cli.logging"):
             exit_code = main(["--debug", "test"])
 
         assert exit_code == 0

@@ -625,18 +625,16 @@ class TestCommandExecution:
         else:
             command = "echo test"
 
-        result = None
         output = ""
 
         for chunk in executor.execute_command_stream(command, timeout=5):
             output += chunk
 
-        assert result is None or isinstance(result, ActionResult)
+        assert isinstance(output, str)
 
     def test_execute_command_stream_dry_run(self, executor_dry_run: ActionExecutor) -> None:
         """Test command execution in dry-run mode."""
         output = ""
-        result = None
 
         for chunk in executor_dry_run.execute_command_stream("echo test"):
             output += chunk

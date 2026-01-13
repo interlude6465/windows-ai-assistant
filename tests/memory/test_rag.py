@@ -6,8 +6,7 @@ Covers ingestion, retrieval scoring, planner prompt enrichment, and regression t
 
 import tempfile
 from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,7 +14,7 @@ from spectral.config import JarvisConfig, LLMConfig, SafetyConfig, StorageConfig
 from spectral.llm_client import LLMClient
 from spectral.memory_rag.rag_service import DocumentChunk, RAGMemoryService, RetrievalResult
 from spectral.persistent_memory import MemoryModule
-from spectral.reasoning import Plan, PlanStep, ReasoningModule
+from spectral.reasoning import ReasoningModule
 from spectral.tool_teaching import ToolTeachingModule
 
 
