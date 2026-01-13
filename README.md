@@ -1,12 +1,12 @@
-# Jarvis - Advanced Windows AI Assistant
+# Spectral - Advanced Windows AI Assistant
 
 A Python-based AI assistant with local LLM support, offering natural language command processing with configurable safety features and storage management.
 
 ## Project Structure
 
 ```
-jarvis/
-├── src/jarvis/                 # Main package
+spectral/
+├── src/spectral/                 # Main package
 │   ├── __init__.py
 │   ├── __main__.py             # Module entry point
 │   ├── app.py                  # GUI application (CustomTkinter)
@@ -101,7 +101,7 @@ jarvis/
    - Real-time plan and execution feedback
 
 - **Voice Control**: Optional voice interface for hands-free operation:
-   - Wake-word detection ("Jarvis" or custom)
+   - Wake-word detection ("Spectral" or custom)
    - Automatic speech-to-text conversion
    - State machine for reliable voice processing
    - Visual feedback for voice activity
@@ -127,7 +127,7 @@ jarvis/
 ### 1. Clone the repository
 ```bash
 git clone <repository-url>
-cd jarvis
+cd spectral
 ```
 
 ### 2. Create a virtual environment
@@ -182,16 +182,16 @@ python3 -c "import customtkinter; print('GUI ready!')"
 
 Once installed, launch the GUI with:
 ```bash
-python -m jarvis --gui
+python -m spectral --gui
 ```
 
 ## Configuration
 
-Configuration can be provided via YAML or JSON files. By default, Jarvis uses sensible defaults with `llama3` as the default LLM model.
+Configuration can be provided via YAML or JSON files. By default, Spectral uses sensible defaults with `llama3` as the default LLM model.
 
 ### Ollama Setup
 
-Jarvis requires Ollama to be running locally with the `llama3` model available. Follow these steps to set up:
+Spectral requires Ollama to be running locally with the `llama3` model available. Follow these steps to set up:
 
 1. **Install Ollama**: Download and install from [ollama.ai](https://ollama.ai)
 
@@ -205,13 +205,13 @@ ollama serve
 ollama pull llama3
 ```
 
-By default, Ollama runs on `http://localhost:11434`, which is what Jarvis expects.
+By default, Ollama runs on `http://localhost:11434`, which is what Spectral expects.
 
 ### Configuration File Locations
 
 Configuration files can be specified via CLI:
 ```bash
-python -m jarvis --config /path/to/config.yaml "your command"
+python -m spectral --config /path/to/config.yaml "your command"
 ```
 
 ### Configuration File Format
@@ -234,9 +234,9 @@ safety:
   max_command_length: 10000
 
 storage:
-  data_dir: ~/.jarvis/data
-  logs_dir: ~/.jarvis/logs
-  config_file: ~/.jarvis/config.yaml
+  data_dir: ~/.spectral/data
+  logs_dir: ~/.spectral/logs
+  config_file: ~/.spectral/config.yaml
 ```
 
 **config.json:**
@@ -257,16 +257,16 @@ storage:
     "max_command_length": 10000
   },
   "storage": {
-    "data_dir": "~/.jarvis/data",
-    "logs_dir": "~/.jarvis/logs",
-    "config_file": "~/.jarvis/config.yaml"
+    "data_dir": "~/.spectral/data",
+    "logs_dir": "~/.spectral/logs",
+    "config_file": "~/.spectral/config.yaml"
   }
 }
 ```
 
 ### LLM Request Timeout Configuration
 
-The `timeout` parameter controls how long Jarvis will wait for LLM responses. This is important when using large models.
+The `timeout` parameter controls how long Spectral will wait for LLM responses. This is important when using large models.
 
 **Recommended timeouts by model:**
 - **llama3**: 30-60 seconds (good balance of speed and capability)
@@ -291,7 +291,7 @@ llm:
 
 ### Dual-Model Configuration (Advanced)
 
-Jarvis supports a dual-model architecture where separate LLMs handle reasoning/planning (Brain) and execution (Executor). This allows you to use a powerful reasoning model for complex planning while maintaining fast responses with a lighter executor model.
+Spectral supports a dual-model architecture where separate LLMs handle reasoning/planning (Brain) and execution (Executor). This allows you to use a powerful reasoning model for complex planning while maintaining fast responses with a lighter executor model.
 
 **Key Benefits:**
 - **Brain Model**: Deep reasoning and planning with DeepSeek-R1-Distill-Llama-70B Q4_K_M
@@ -349,7 +349,7 @@ ollama pull llama3.1:8b
 
 3. **Access the models in code:**
 ```python
-from jarvis.container import Container
+from spectral.container import Container
 
 container = Container()
 manager = container.get_dual_model_manager()
@@ -377,32 +377,32 @@ You can override the default model in several ways:
 
 1. **Via configuration file**: Update the `llm.model` field in your `config.yaml` or `config.json`
 2. **Via environment variable**: Set `JARVIS_LLM_MODEL` (future implementation)
-3. **Via CLI flag**: Use `--model` when running Jarvis (future implementation)
+3. **Via CLI flag**: Use `--model` when running Spectral (future implementation)
 
 ## Usage
 
 ### Tool Teaching - Learning from Documentation
 
-The Tool Teaching Module allows Jarvis to learn new tool capabilities from documentation files.
+The Tool Teaching Module allows Spectral to learn new tool capabilities from documentation files.
 
 **Basic usage:**
 ```bash
-python -m jarvis.learn --source /path/to/tool_documentation.txt
+python -m spectral.learn --source /path/to/tool_documentation.txt
 ```
 
 **With verbose progress output:**
 ```bash
-python -m jarvis.learn --source /path/to/tool_doc.md --verbose
+python -m spectral.learn --source /path/to/tool_doc.md --verbose
 ```
 
 **With debug logging:**
 ```bash
-python -m jarvis.learn --source /path/to/tool_doc.pdf --debug
+python -m spectral.learn --source /path/to/tool_doc.pdf --debug
 ```
 
 **With custom configuration:**
 ```bash
-python -m jarvis.learn --source ./docs/tool.txt --config config.yaml
+python -m spectral.learn --source ./docs/tool.txt --config config.yaml
 ```
 
 **Supported file formats:**
@@ -413,7 +413,7 @@ python -m jarvis.learn --source ./docs/tool.txt --config config.yaml
 **Example:**
 ```bash
 # Learn file operations from documentation
-python -m jarvis.learn --source examples/sample_tool_doc.md --verbose
+python -m spectral.learn --source examples/sample_tool_doc.md --verbose
 
 # Output:
 # [INFO] Learning from: examples/sample_tool_doc.md
@@ -431,7 +431,7 @@ python -m jarvis.learn --source examples/sample_tool_doc.md --verbose
 
 **Accessing learned tool knowledge in code:**
 ```python
-from jarvis.container import Container
+from spectral.container import Container
 
 container = Container()
 tool_teaching = container.get_tool_teaching_module()
@@ -458,17 +458,17 @@ all_tools = orchestrator.list_available_tools()
 
 **Basic launch:**
 ```bash
-python -m jarvis --gui
+python -m spectral --gui
 ```
 
 **With custom configuration:**
 ```bash
-python -m jarvis --gui --config /path/to/config.yaml
+python -m spectral --gui --config /path/to/config.yaml
 ```
 
 **With debug logging:**
 ```bash
-python -m jarvis --gui --debug
+python -m spectral --gui --debug
 ```
 
 The GUI provides:
@@ -497,11 +497,11 @@ pip install pyaudio
 
 **Launch with voice control:**
 ```bash
-python -m jarvis --gui --voice
+python -m spectral --gui --voice
 ```
 
 **Voice Control Features:**
-- **Wake Word Detection**: Automatically listens for "Jarvis" (configurable)
+- **Wake Word Detection**: Automatically listens for "Spectral" (configurable)
 - **Automatic STT**: Converts voice to text using Google Speech Recognition
 - **Visual Feedback**: On-screen indicators show listening status
 - **Seamless Integration**: Voice commands flow directly to the orchestrator
@@ -509,10 +509,10 @@ python -m jarvis --gui --voice
 
 **Testing voice interface in isolation:**
 ```python
-from jarvis.voice import VoiceInterface
+from spectral.voice import VoiceInterface
 
 vi = VoiceInterface(
-    wakeword="jarvis",
+    wakeword="spectral",
     on_command=lambda cmd: print(f"Command: {cmd}"),
     on_error=lambda err: print(f"Error: {err}")
 )
@@ -521,7 +521,7 @@ vi = VoiceInterface(
 vi.start()
 
 # Or inject text for testing (no microphone needed)
-vi.inject_text("Jarvis turn on the lights")
+vi.inject_text("Spectral turn on the lights")
 ```
 
 **Troubleshooting voice:**
@@ -536,13 +536,13 @@ For detailed voice features, see [GUI_MODE.md](GUI_MODE.md#voice-control-install
 
 **Basic usage:**
 ```bash
-python -m jarvis --chat
+python -m spectral --chat
 ```
 
 **Short forms:**
 ```bash
-python -m jarvis --interactive
-python -m jarvis -i
+python -m spectral --interactive
+python -m spectral -i
 ```
 
 For detailed chat mode features, see [CHAT_MODE.md](CHAT_MODE.md).
@@ -551,33 +551,33 @@ For detailed chat mode features, see [CHAT_MODE.md](CHAT_MODE.md).
 
 **Basic usage:**
 ```bash
-python -m jarvis "what is the current time?"
+python -m spectral "what is the current time?"
 ```
 
 **With configuration file:**
 ```bash
-python -m jarvis --config config.yaml "list files on desktop"
+python -m spectral --config config.yaml "list files on desktop"
 ```
 
 **With debug logging:**
 ```bash
-python -m jarvis --debug "help"
+python -m spectral --debug "help"
 ```
 
 **Show version:**
 ```bash
-python -m jarvis --version
+python -m spectral --version
 ```
 
 **Show help:**
 ```bash
-python -m jarvis --help
+python -m spectral --help
 ```
 
 ### Programmatic Usage
 
 ```python
-from jarvis.container import Container
+from spectral.container import Container
 
 # Create DI container
 container = Container()
@@ -604,7 +604,7 @@ PYTHONPATH=/home/engine/project/src python -m pytest tests/ --tb=no -q
 
 **Run with coverage report:**
 ```bash
-pytest --cov=src/jarvis --cov-report=html
+pytest --cov=src/spectral --cov-report=html
 ```
 
 **Run specific test file:**
@@ -669,7 +669,7 @@ black src/ tests/ --check
 isort src/ tests/ --check-only
 flake8 src/ tests/
 mypy src/
-pytest --cov=src/jarvis
+pytest --cov=src/spectral
 ```
 
 ## Architecture
@@ -727,7 +727,7 @@ The test suite covers:
 ### Running Tests with Coverage
 
 ```bash
-pytest --cov=src/jarvis --cov-report=term-missing --cov-report=html
+pytest --cov=src/spectral --cov-report=term-missing --cov-report=html
 ```
 
 Coverage reports are generated in:
@@ -745,12 +745,12 @@ Logs are configured automatically based on the configuration:
 ### Log Format
 
 ```
-2024-01-15 10:30:45 - jarvis.cli - INFO - Command executed successfully
+2024-01-15 10:30:45 - spectral.cli - INFO - Command executed successfully
 ```
 
 ## System Actions
 
-Jarvis includes a comprehensive system actions framework that provides structured access to system-level operations:
+Spectral includes a comprehensive system actions framework that provides structured access to system-level operations:
 
 ### Available Action Categories
 
@@ -799,7 +799,7 @@ Jarvis includes a comprehensive system actions framework that provides structure
 The `SystemActionRouter` provides a unified interface:
 
 ```python
-from jarvis.system_actions import SystemActionRouter
+from spectral.system_actions import SystemActionRouter
 
 # Initialize router
 router = SystemActionRouter(dry_run=True)

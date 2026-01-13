@@ -4,7 +4,7 @@ Tests for execution router module.
 
 import pytest
 
-from jarvis.execution_router import ExecutionRouter, ExecutionMode
+from spectral.execution_router import ExecutionMode, ExecutionRouter
 
 
 @pytest.fixture

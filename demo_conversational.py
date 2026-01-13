@@ -2,14 +2,15 @@
 """
 Demonstration of conversational response feature.
 
-Shows how Jarvis now distinguishes between casual conversation and commands,
+Shows how Spectral now distinguishes between casual conversation and commands,
 responding naturally in both cases.
 """
 
 import os
 import sys
-from jarvis.intent_classifier import IntentClassifier
-from jarvis.response_generator import ResponseGenerator
+
+from spectral.intent_classifier import IntentClassifier
+from spectral.response_generator import ResponseGenerator
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
@@ -22,7 +23,7 @@ def demo():
     print("JARVIS CONVERSATIONAL RESPONSE FEATURE DEMO")
     print("=" * 70)
     print()
-    print("This demo shows how Jarvis now handles both casual conversation")
+    print("This demo shows how Spectral now handles both casual conversation")
     print("and commands with natural, appropriate responses.\n")
 
     # Initialize components

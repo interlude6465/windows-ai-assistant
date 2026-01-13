@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from jarvis.execution_monitor import ExecutionMonitor
+from spectral.execution_monitor import ExecutionMonitor
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific test")

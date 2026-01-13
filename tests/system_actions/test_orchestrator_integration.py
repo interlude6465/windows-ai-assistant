@@ -7,11 +7,11 @@ Tests the plan execution flow through the SystemActionRouter.
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
-from jarvis.action_executor import ActionResult
-from jarvis.config import JarvisConfig
-from jarvis.orchestrator import Orchestrator
-from jarvis.reasoning import Plan, PlanStep, SafetyFlag
-from jarvis.system_actions import SystemActionRouter
+from spectral.action_executor import ActionResult
+from spectral.config import JarvisConfig
+from spectral.orchestrator import Orchestrator
+from spectral.reasoning import Plan, PlanStep, SafetyFlag
+from spectral.system_actions import SystemActionRouter
 
 
 class TestOrchestratorIntegration:

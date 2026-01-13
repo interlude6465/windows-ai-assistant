@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from jarvis.action_executor import ActionExecutor, ActionResult
+from spectral.action_executor import ActionExecutor, ActionResult
 
 
 @pytest.fixture
@@ -91,18 +91,14 @@ class TestPathValidation:
         assert executor._check_path_allowed(Path("/tmp"))
         assert executor._check_path_allowed(Path.home())
 
-    def test_check_path_allowed_with_allowlist(
-        self, temp_directory: Path
-    ) -> None:
+    def test_check_path_allowed_with_allowlist(self, temp_directory: Path) -> None:
         """Test path validation with allowlist."""
         executor = ActionExecutor(allowed_directories=[temp_directory])
         assert executor._check_path_allowed(temp_directory)
         assert executor._check_path_allowed(temp_directory / "subdir")
         assert not executor._check_path_allowed(Path("/etc"))
 
-    def test_check_path_disallowed_with_denylist(
-        self, temp_directory: Path
-    ) -> None:
+    def test_check_path_disallowed_with_denylist(self, temp_directory: Path) -> None:
         """Test path validation with denylist."""
         executor = ActionExecutor(disallowed_directories=[temp_directory])
         assert not executor._check_path_allowed(temp_directory)
@@ -164,9 +160,7 @@ class TestFileOperations:
     def test_list_files_access_denied(self, temp_directory: Path, executor: ActionExecutor) -> None:
         """Test that access denied is enforced for list_files."""
         result = executor.list_files(temp_directory / "restricted")
-        result_executor = ActionExecutor(
-            allowed_directories=[Path("/tmp/some_other_dir")]
-        )
+        result_executor = ActionExecutor(allowed_directories=[Path("/tmp/some_other_dir")])
         result = result_executor.list_files(temp_directory)
         assert not result.success
         assert "Access denied" in result.message
@@ -211,7 +205,9 @@ class TestFileOperations:
         assert not result.success
         assert "already exists" in result.message
 
-    def test_create_file_access_denied(self, temp_directory: Path, executor: ActionExecutor) -> None:
+    def test_create_file_access_denied(
+        self, temp_directory: Path, executor: ActionExecutor
+    ) -> None:
         """Test creating a file in restricted directory."""
         result = executor.create_file("/etc/test.txt", "content")
         assert not result.success
@@ -350,7 +346,9 @@ class TestFileOperations:
 class TestDryRunMode:
     """Tests for dry-run mode."""
 
-    def test_create_file_dry_run(self, temp_directory: Path, executor_dry_run: ActionExecutor) -> None:
+    def test_create_file_dry_run(
+        self, temp_directory: Path, executor_dry_run: ActionExecutor
+    ) -> None:
         """Test that dry-run doesn't create files."""
         file_path = temp_directory / "test.txt"
         result = executor_dry_run.create_file(file_path, "content")
@@ -359,7 +357,9 @@ class TestDryRunMode:
         assert "[DRY RUN]" in result.message
         assert not file_path.exists()
 
-    def test_delete_file_dry_run(self, temp_directory: Path, executor_dry_run: ActionExecutor) -> None:
+    def test_delete_file_dry_run(
+        self, temp_directory: Path, executor_dry_run: ActionExecutor
+    ) -> None:
         """Test that dry-run doesn't delete files."""
         file_path = temp_directory / "test.txt"
         file_path.touch()
@@ -370,7 +370,9 @@ class TestDryRunMode:
         assert "[DRY RUN]" in result.message
         assert file_path.exists()
 
-    def test_move_file_dry_run(self, temp_directory: Path, executor_dry_run: ActionExecutor) -> None:
+    def test_move_file_dry_run(
+        self, temp_directory: Path, executor_dry_run: ActionExecutor
+    ) -> None:
         """Test that dry-run doesn't move files."""
         src = temp_directory / "source.txt"
         dst = temp_directory / "dest.txt"
@@ -383,7 +385,9 @@ class TestDryRunMode:
         assert src.exists()
         assert not dst.exists()
 
-    def test_copy_file_dry_run(self, temp_directory: Path, executor_dry_run: ActionExecutor) -> None:
+    def test_copy_file_dry_run(
+        self, temp_directory: Path, executor_dry_run: ActionExecutor
+    ) -> None:
         """Test that dry-run doesn't copy files."""
         src = temp_directory / "source.txt"
         dst = temp_directory / "dest.txt"
@@ -395,7 +399,9 @@ class TestDryRunMode:
         assert "[DRY RUN]" in result.message
         assert not dst.exists()
 
-    def test_delete_directory_dry_run(self, temp_directory: Path, executor_dry_run: ActionExecutor) -> None:
+    def test_delete_directory_dry_run(
+        self, temp_directory: Path, executor_dry_run: ActionExecutor
+    ) -> None:
         """Test that dry-run doesn't delete directories."""
         dir_path = temp_directory / "subdir"
         dir_path.mkdir()
@@ -416,7 +422,9 @@ class TestApplicationControl:
         assert not result.success
         assert "not found" in result.message
 
-    def test_open_application_dry_run(self, temp_directory: Path, executor_dry_run: ActionExecutor) -> None:
+    def test_open_application_dry_run(
+        self, temp_directory: Path, executor_dry_run: ActionExecutor
+    ) -> None:
         """Test dry-run mode for opening applications."""
         file_path = temp_directory / "test.txt"
         file_path.touch()
@@ -458,9 +466,7 @@ class TestApplicationControl:
         call_args = mock_run.call_args
         assert "open" in call_args[0][0]
 
-    def test_open_application_windows(
-        self, temp_directory: Path, executor: ActionExecutor
-    ) -> None:
+    def test_open_application_windows(self, temp_directory: Path, executor: ActionExecutor) -> None:
         """Test opening application on Windows."""
         file_path = temp_directory / "test.txt"
         file_path.touch()
@@ -476,9 +482,7 @@ class TestApplicationControl:
         assert result.success
         mock_startfile.assert_called_once()
 
-    def test_open_application_timeout(
-        self, temp_directory: Path
-    ) -> None:
+    def test_open_application_timeout(self, temp_directory: Path) -> None:
         """Test timeout when opening application."""
         file_path = temp_directory / "test.txt"
         file_path.touch()
@@ -521,6 +525,7 @@ class TestSystemInfo:
 
         # Should be ISO format
         from datetime import datetime
+
         try:
             datetime.fromisoformat(timestamp)
         except ValueError:
@@ -563,8 +568,9 @@ class TestWeatherQuery:
     def test_get_weather_connection_error(self, mock_get: Mock, executor: ActionExecutor) -> None:
         """Test weather query connection error."""
         import requests
+
         mock_get.side_effect = requests.RequestException("Connection error")
-        
+
         result = executor.get_weather("London")
 
         assert not result.success
@@ -619,18 +625,16 @@ class TestCommandExecution:
         else:
             command = "echo test"
 
-        result = None
         output = ""
 
         for chunk in executor.execute_command_stream(command, timeout=5):
             output += chunk
 
-        assert result is None or isinstance(result, ActionResult)
+        assert isinstance(output, str)
 
     def test_execute_command_stream_dry_run(self, executor_dry_run: ActionExecutor) -> None:
         """Test command execution in dry-run mode."""
         output = ""
-        result = None
 
         for chunk in executor_dry_run.execute_command_stream("echo test"):
             output += chunk

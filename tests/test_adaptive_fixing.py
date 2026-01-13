@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from jarvis.adaptive_fixing import AdaptiveFixEngine
-from jarvis.execution_models import CodeStep, FailureDiagnosis
+from spectral.adaptive_fixing import AdaptiveFixEngine
+from spectral.execution_models import CodeStep, FailureDiagnosis
 
 
 @pytest.fixture

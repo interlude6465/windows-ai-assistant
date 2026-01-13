@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from jarvis.action_executor import ActionExecutor, ActionResult
-from jarvis.system_actions import (
+from spectral.action_executor import ActionExecutor, ActionResult
+from spectral.system_actions import (
     FileActions,
     GUIControlActions,
     OCRActions,
@@ -175,14 +175,14 @@ class TestFileActions:
 class TestGUIControlActions:
     """Test the GUIControlActions class."""
 
-    @patch("jarvis.system_actions.gui_control.PYAUTOGUI_AVAILABLE", False)
+    @patch("spectral.system_actions.gui_control.PYAUTOGUI_AVAILABLE", False)
     def test_init_without_pyautogui(self):
         """Test initialization when pyautogui not available."""
         actions = GUIControlActions(dry_run=True)
         assert actions.dry_run is True
 
-    @patch("jarvis.system_actions.gui_control.PYAUTOGUI_AVAILABLE", True)
-    @patch("jarvis.system_actions.gui_control.pyautogui")
+    @patch("spectral.system_actions.gui_control.PYAUTOGUI_AVAILABLE", True)
+    @patch("spectral.system_actions.gui_control.pyautogui")
     def test_get_screen_size(self, mock_pyautogui):
         """Test getting screen size."""
         mock_pyautogui.size.return_value = (1920, 1080)
@@ -194,8 +194,8 @@ class TestGUIControlActions:
         assert result.data["width"] == 1920
         assert result.data["height"] == 1080
 
-    @patch("jarvis.system_actions.gui_control.PYAUTOGUI_AVAILABLE", True)
-    @patch("jarvis.system_actions.gui_control.pyautogui")
+    @patch("spectral.system_actions.gui_control.PYAUTOGUI_AVAILABLE", True)
+    @patch("spectral.system_actions.gui_control.pyautogui")
     def test_move_mouse_dry_run(self, mock_pyautogui):
         """Test moving mouse in dry run mode."""
         actions = GUIControlActions(dry_run=True)
@@ -205,8 +205,8 @@ class TestGUIControlActions:
         assert "DRY-RUN" in result.message
         mock_pyautogui.moveTo.assert_not_called()
 
-    @patch("jarvis.system_actions.gui_control.PYAUTOGUI_AVAILABLE", True)
-    @patch("jarvis.system_actions.gui_control.pyautogui")
+    @patch("spectral.system_actions.gui_control.PYAUTOGUI_AVAILABLE", True)
+    @patch("spectral.system_actions.gui_control.pyautogui")
     def test_click_mouse(self, mock_pyautogui):
         """Test clicking mouse."""
         actions = GUIControlActions(dry_run=False)
@@ -219,14 +219,14 @@ class TestGUIControlActions:
 class TestTypingActions:
     """Test the TypingActions class."""
 
-    @patch("jarvis.system_actions.typing.PYAUTOGUI_AVAILABLE", False)
+    @patch("spectral.system_actions.typing.PYAUTOGUI_AVAILABLE", False)
     def test_init_without_pyautogui(self):
         """Test initialization when pyautogui not available."""
         actions = TypingActions(dry_run=True)
         assert actions.dry_run is True
 
-    @patch("jarvis.system_actions.typing.PYAUTOGUI_AVAILABLE", True)
-    @patch("jarvis.system_actions.typing.pyautogui")
+    @patch("spectral.system_actions.typing.PYAUTOGUI_AVAILABLE", True)
+    @patch("spectral.system_actions.typing.pyautogui")
     def test_type_text(self, mock_pyautogui):
         """Test typing text."""
         actions = TypingActions(dry_run=False)
@@ -235,8 +235,8 @@ class TestTypingActions:
         assert result.success is True
         mock_pyautogui.typewrite.assert_called_once_with("Hello World", interval=0.02)
 
-    @patch("jarvis.system_actions.typing.PYPECLIP_AVAILABLE", True)
-    @patch("jarvis.system_actions.typing.pyperclip")
+    @patch("spectral.system_actions.typing.PYPECLIP_AVAILABLE", True)
+    @patch("spectral.system_actions.typing.pyperclip")
     def test_copy_to_clipboard(self, mock_pyperclip):
         """Test copying to clipboard."""
         mock_pyperclip.copy.return_value = None
@@ -251,13 +251,13 @@ class TestTypingActions:
 class TestRegistryActions:
     """Test the RegistryActions class."""
 
-    @patch("jarvis.system_actions.registry.WINREG_AVAILABLE", False)
+    @patch("spectral.system_actions.registry.WINREG_AVAILABLE", False)
     def test_init_without_winreg(self):
         """Test initialization when winreg not available."""
         actions = RegistryActions(dry_run=True)
         assert actions.dry_run is True
 
-    @patch("jarvis.system_actions.registry.WINREG_AVAILABLE", False)
+    @patch("spectral.system_actions.registry.WINREG_AVAILABLE", False)
     def test_list_subkeys_not_available(self):
         """Test listing subkeys when winreg not available."""
         actions = RegistryActions()
@@ -266,8 +266,8 @@ class TestRegistryActions:
         assert result.success is False
         assert "not available" in result.message
 
-    @patch("jarvis.system_actions.registry.WINREG_AVAILABLE", True)
-    @patch("jarvis.system_actions.registry.winreg")
+    @patch("spectral.system_actions.registry.WINREG_AVAILABLE", True)
+    @patch("spectral.system_actions.registry.winreg")
     def test_list_subkeys_dry_run(self, mock_winreg):
         """Test listing subkeys in dry run mode."""
         actions = RegistryActions(dry_run=True)
@@ -281,13 +281,13 @@ class TestRegistryActions:
 class TestOCRActions:
     """Test the OCRActions class."""
 
-    @patch("jarvis.system_actions.ocr.PYTESSERACT_AVAILABLE", False)
+    @patch("spectral.system_actions.ocr.PYTESSERACT_AVAILABLE", False)
     def test_init_without_pytesseract(self):
         """Test initialization when pytesseract not available."""
         actions = OCRActions(dry_run=True)
         assert actions.dry_run is True
 
-    @patch("jarvis.system_actions.ocr.PYTESSERACT_AVAILABLE", False)
+    @patch("spectral.system_actions.ocr.PYTESSERACT_AVAILABLE", False)
     def test_extract_text_from_image_not_available(self):
         """Test text extraction when pytesseract not available."""
         actions = OCRActions()
@@ -296,10 +296,10 @@ class TestOCRActions:
         assert result.success is False
         assert "not available" in result.message
 
-    @patch("jarvis.system_actions.ocr.PYTESSERACT_AVAILABLE", True)
-    @patch("jarvis.system_actions.ocr.PYAUTOGUI_AVAILABLE", True)
-    @patch("jarvis.system_actions.ocr.pytesseract")
-    @patch("jarvis.system_actions.ocr.pyautogui")
+    @patch("spectral.system_actions.ocr.PYTESSERACT_AVAILABLE", True)
+    @patch("spectral.system_actions.ocr.PYAUTOGUI_AVAILABLE", True)
+    @patch("spectral.system_actions.ocr.pytesseract")
+    @patch("spectral.system_actions.ocr.pyautogui")
     def test_extract_text_from_screen(self, mock_pyautogui, mock_pytesseract):
         """Test extracting text from screen."""
         from PIL import Image
@@ -327,7 +327,7 @@ class TestPowerShellActions:
         assert actions.timeout == 60
         assert actions.powershell_cmd is not None
 
-    @patch("jarvis.system_actions.powershell.subprocess")
+    @patch("spectral.system_actions.powershell.subprocess")
     def test_execute_command_dry_run(self, mock_subprocess):
         """Test executing command in dry run mode."""
         actions = PowerShellActions(dry_run=True)
@@ -341,7 +341,7 @@ class TestPowerShellActions:
         mock_subprocess.run.assert_not_called()
         mock_subprocess.Popen.assert_not_called()
 
-    @patch("jarvis.system_actions.powershell.subprocess")
+    @patch("spectral.system_actions.powershell.subprocess")
     def test_execute_command_success(self, mock_subprocess):
         """Test successful command execution."""
         import subprocess
@@ -382,7 +382,7 @@ class TestSubprocessActions:
         assert actions.dry_run is True
         assert actions.timeout == 60
 
-    @patch("jarvis.system_actions.subprocess_actions.subprocess")
+    @patch("spectral.system_actions.subprocess_actions.subprocess")
     def test_execute_command_dry_run(self, mock_subprocess):
         """Test executing command in dry run mode."""
         actions = SubprocessActions(dry_run=True)
@@ -392,7 +392,7 @@ class TestSubprocessActions:
         assert "DRY-RUN" in result.message
         mock_subprocess.run.assert_not_called()
 
-    @patch("jarvis.system_actions.subprocess_actions.subprocess")
+    @patch("spectral.system_actions.subprocess_actions.subprocess")
     def test_execute_command_success(self, mock_subprocess):
         """Test successful command execution."""
         import subprocess
@@ -414,7 +414,7 @@ class TestSubprocessActions:
         assert "hello" in result.data["stdout"]
         mock_subprocess.Popen.assert_called()
 
-    @patch("jarvis.system_actions.subprocess_actions.subprocess")
+    @patch("spectral.system_actions.subprocess_actions.subprocess")
     def test_ping_host(self, mock_subprocess):
         """Test pinging a host."""
         import subprocess
@@ -435,9 +435,9 @@ class TestSubprocessActions:
         assert result.success is True
         mock_subprocess.Popen.assert_called()
 
-    @patch("jarvis.system_actions.subprocess_actions.sys.platform", "win32")
-    @patch("jarvis.system_actions.subprocess_actions.os")
-    @patch("jarvis.system_actions.subprocess_actions.subprocess")
+    @patch("spectral.system_actions.subprocess_actions.sys.platform", "win32")
+    @patch("spectral.system_actions.subprocess_actions.os")
+    @patch("spectral.system_actions.subprocess_actions.subprocess")
     def test_open_application_windows(self, mock_subprocess, mock_os):
         """Test opening application on Windows."""
         actions = SubprocessActions(dry_run=False)

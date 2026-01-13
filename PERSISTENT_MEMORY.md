@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Persistent Memory Module (`persistent_memory.py`) provides a comprehensive, pluggable storage layer for persisting application state across sessions. It enables Jarvis to remember user preferences, past tasks, device information, and learned tool metadata with full CRUD capabilities and rich query support.
+The Persistent Memory Module (`persistent_memory.py`) provides a comprehensive, pluggable storage layer for persisting application state across sessions. It enables Spectral to remember user preferences, past tasks, device information, and learned tool metadata with full CRUD capabilities and rich query support.
 
 ## Architecture
 
@@ -54,12 +54,12 @@ MemoryEntry(
 ### Initialization
 
 ```python
-from jarvis.persistent_memory import MemoryModule
+from spectral.persistent_memory import MemoryModule
 from pathlib import Path
 
 # Using SQLite (default)
 memory = MemoryModule(
-    storage_dir=Path.home() / ".jarvis" / "memory",
+    storage_dir=Path.home() / ".spectral" / "memory",
     backend_type="sqlite"  # or "json"
 )
 
@@ -165,7 +165,7 @@ memory.shutdown()
 The `MemoryModule` is integrated with the DI container for automatic initialization:
 
 ```python
-from jarvis.container import Container
+from spectral.container import Container
 
 container = Container()
 memory_module = container.get_memory_module()
@@ -188,7 +188,7 @@ memory_module = container.get_memory_module()
 - Query: O(log n) with indexes
 - Concurrent access supported via SQLite's locking
 
-**File Location:** `~/.jarvis/memory/memory.db`
+**File Location:** `~/.spectral/memory/memory.db`
 
 ### JSON Backend
 
@@ -203,7 +203,7 @@ memory_module = container.get_memory_module()
 - Query: O(n) - in-memory filtering
 - Best for < 1000 entries
 
-**File Location:** `~/.jarvis/memory/memory.json`
+**File Location:** `~/.spectral/memory/memory.json`
 
 ## Provenance Tracking
 
@@ -401,13 +401,13 @@ def recall_tool(memory: MemoryModule, tool_name: str):
 
 ## Configuration
 
-The memory storage location can be configured through the main Jarvis config:
+The memory storage location can be configured through the main Spectral config:
 
 ```yaml
-# ~/.jarvis/config.yaml
+# ~/.spectral/config.yaml
 storage:
-  data_dir: ~/.jarvis/data
-  # Persistent memory stored in: ~/.jarvis/data/persistent_memory/
+  data_dir: ~/.spectral/data
+  # Persistent memory stored in: ~/.spectral/data/persistent_memory/
 ```
 
 ## Troubleshooting
