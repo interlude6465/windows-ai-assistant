@@ -91,22 +91,22 @@ injector = PromptInjector(debug_enabled=False)  # NEW: Pass parameter
 
 ## Files Modified
 
-1. **src/jarvis/sandbox_execution_system.py**
+1. **src/spectral/sandbox_execution_system.py**
    - Modified `_run_tests()` to count input() calls
    - Pass input_count to test case generator
 
-2. **src/jarvis/test_case_generator.py**
+2. **src/spectral/test_case_generator.py**
    - Modified `generate_test_cases()` signature
    - Modified all test generation methods
    - Added `_generate_string_inputs()`
    - Added `_generate_numeric_inputs()`
    - Added `_has_output()`
 
-3. **src/jarvis/prompt_injector.py**
+3. **src/spectral/prompt_injector.py**
    - Fixed `__init__()` to accept `debug_enabled` parameter
    - Initialize `self.debug_enabled` attribute
 
-4. **src/jarvis/code_cleaner.py**
+4. **src/spectral/code_cleaner.py**
    - Pass `debug_enabled=False` when creating `PromptInjector`
 
 ## Key Features

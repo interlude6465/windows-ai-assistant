@@ -4,7 +4,7 @@ from typing import Optional
 
 import pytest
 
-from jarvis.retry_parsing import parse_retry_limit
+from spectral.retry_parsing import parse_retry_limit
 
 
 @pytest.mark.parametrize(

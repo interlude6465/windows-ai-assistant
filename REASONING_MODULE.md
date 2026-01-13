@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Reasoning Module (`jarvis.reasoning`) provides a sophisticated planning and task decomposition engine for the Jarvis AI Assistant. It breaks down user requests into structured, executable plans with built-in validation and safety checks.
+The Reasoning Module (`spectral.reasoning`) provides a sophisticated planning and task decomposition engine for the Spectral AI Assistant. It breaks down user requests into structured, executable plans with built-in validation and safety checks.
 
 ## Key Components
 
@@ -41,9 +41,9 @@ The module defines a comprehensive plan schema with the following hierarchy:
 The main reasoning engine with the following interface:
 
 ```python
-from jarvis.reasoning import ReasoningModule
-from jarvis.config import JarvisConfig
-from jarvis.llm_client import LLMClient
+from spectral.reasoning import ReasoningModule
+from spectral.config import JarvisConfig
+from spectral.llm_client import LLMClient
 
 config = JarvisConfig()
 llm_client = LLMClient(config.llm)
@@ -112,7 +112,7 @@ Available safety flags indicate operation characteristics:
 The ReasoningModule is registered in the DI container:
 
 ```python
-from jarvis.container import Container
+from spectral.container import Container
 
 container = Container()
 reasoning_module = container.get_reasoning_module()
@@ -125,7 +125,7 @@ The module works seamlessly with mocked LLM clients for testing:
 
 ```python
 from unittest.mock import MagicMock
-from jarvis.reasoning import ReasoningModule
+from spectral.reasoning import ReasoningModule
 
 llm_client = MagicMock()
 llm_client.extract_tool_knowledge.return_value = {

@@ -6,14 +6,14 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 # Import from our modules, handling optional dependencies
-import jarvis.execution_verifier as ev_module
-from jarvis.action_executor import ActionResult
+import spectral.execution_verifier as ev_module
+from spectral.action_executor import ActionResult
 
 # Set psutil as unavailable for testing
 ev_module.PSUTIL_AVAILABLE = False
 ev_module.psutil = None
 
-from jarvis.action_fallback_strategies import (
+from spectral.action_fallback_strategies import (
     ApplicationFallbackStrategy,
     ExecutionReport,
     InputFallbackStrategy,
@@ -21,7 +21,7 @@ from jarvis.action_fallback_strategies import (
     RetryAttempt,
     StrategyExecutor,
 )
-from jarvis.execution_verifier import (
+from spectral.execution_verifier import (
     ApplicationVerifier,
     DiagnosticsCollector,
     ExecutionVerifier,

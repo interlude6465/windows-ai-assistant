@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jarvis.cli import create_parser, main
+from spectral.cli import create_parser, main
 
 
 class TestCreateParser:
@@ -14,7 +14,7 @@ class TestCreateParser:
         """Test that parser is created successfully."""
         parser = create_parser()
         assert parser is not None
-        assert parser.prog == "jarvis"
+        assert parser.prog == "spectral"
 
     def test_parse_simple_command(self) -> None:
         """Test parsing a simple command."""
@@ -77,7 +77,7 @@ class TestCreateParser:
 class TestMain:
     """Tests for main CLI function."""
 
-    @patch("jarvis.cli.Container")
+    @patch("spectral.cli.Container")
     def test_main_with_command(self, mock_container_class: MagicMock) -> None:
         """Test main function with a command."""
         # Setup mocks
@@ -104,7 +104,7 @@ class TestMain:
         mock_orchestrator.initialize_modules.assert_called_once()
         mock_orchestrator.handle_command.assert_called_once_with("test command")
 
-    @patch("jarvis.cli.Container")
+    @patch("spectral.cli.Container")
     def test_main_with_config_file(self, mock_container_class: MagicMock) -> None:
         """Test main function with config file."""
         mock_container = MagicMock()
@@ -127,7 +127,7 @@ class TestMain:
         mock_container.get_config.assert_called_once_with(config_path="config.yaml")
         mock_container.get_orchestrator.assert_called_once_with(config_path="config.yaml")
 
-    @patch("jarvis.cli.Container")
+    @patch("spectral.cli.Container")
     def test_main_with_debug_flag(self, mock_container_class: MagicMock) -> None:
         """Test main function with debug flag."""
         mock_container = MagicMock()
@@ -144,13 +144,13 @@ class TestMain:
         }
         mock_container.get_orchestrator.return_value = mock_orchestrator
 
-        with patch("jarvis.cli.logging") as mock_logging:
+        with patch("spectral.cli.logging") as mock_logging:
             exit_code = main(["--debug", "test"])
 
         assert exit_code == 0
         assert mock_config.debug is True
 
-    @patch("jarvis.cli.Container")
+    @patch("spectral.cli.Container")
     def test_main_no_command(self, mock_container_class: MagicMock) -> None:
         """Test main function with no command (should print help)."""
         mock_container = MagicMock()
@@ -168,7 +168,7 @@ class TestMain:
         assert exit_code == 0
         mock_orchestrator.handle_command.assert_not_called()
 
-    @patch("jarvis.cli.Container")
+    @patch("spectral.cli.Container")
     def test_main_exception_handling(self, mock_container_class: MagicMock) -> None:
         """Test main function handles exceptions gracefully."""
         mock_container = MagicMock()
@@ -180,7 +180,7 @@ class TestMain:
         assert exit_code == 1
 
     @patch("sys.stdout")
-    @patch("jarvis.cli.Container")
+    @patch("spectral.cli.Container")
     def test_main_prints_help_without_command(
         self, mock_container_class: MagicMock, mock_stdout: MagicMock
     ) -> None:
@@ -201,8 +201,8 @@ class TestMain:
         # Orchestrator should not be called without a command
         mock_orchestrator.handle_command.assert_not_called()
 
-    @patch("jarvis.cli.ChatSession")
-    @patch("jarvis.cli.Container")
+    @patch("spectral.cli.ChatSession")
+    @patch("spectral.cli.Container")
     def test_main_chat_mode(
         self, mock_container_class: MagicMock, mock_chat_session_class: MagicMock
     ) -> None:
@@ -230,8 +230,8 @@ class TestMain:
         mock_chat_session_class.assert_called_once()
         mock_chat.run_interactive_loop.assert_called_once()
 
-    @patch("jarvis.cli.ChatSession")
-    @patch("jarvis.cli.Container")
+    @patch("spectral.cli.ChatSession")
+    @patch("spectral.cli.Container")
     def test_main_interactive_mode(
         self, mock_container_class: MagicMock, mock_chat_session_class: MagicMock
     ) -> None:
@@ -258,8 +258,8 @@ class TestMain:
         assert exit_code == 0
         mock_chat.run_interactive_loop.assert_called_once()
 
-    @patch("jarvis.cli.ChatSession")
-    @patch("jarvis.cli.Container")
+    @patch("spectral.cli.ChatSession")
+    @patch("spectral.cli.Container")
     def test_main_short_interactive_mode(
         self, mock_container_class: MagicMock, mock_chat_session_class: MagicMock
     ) -> None:

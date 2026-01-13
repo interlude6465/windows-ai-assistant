@@ -2,11 +2,12 @@
 Tests for dual execution orchestrator module.
 """
 
-import pytest
 from unittest.mock import MagicMock, Mock
 
-from jarvis.dual_execution_orchestrator import DualExecutionOrchestrator
-from jarvis.execution_models import ExecutionMode
+import pytest
+
+from spectral.dual_execution_orchestrator import DualExecutionOrchestrator
+from spectral.execution_models import ExecutionMode
 
 
 @pytest.fixture

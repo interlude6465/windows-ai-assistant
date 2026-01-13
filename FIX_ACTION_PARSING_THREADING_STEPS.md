@@ -2,7 +2,7 @@
 
 ## Summary
 
-This fix addresses three critical blocking issues preventing real actions from running in the Jarvis execution pipeline:
+This fix addresses three critical blocking issues preventing real actions from running in the Spectral execution pipeline:
 
 ### Issue 1: Action Parsing Gap ✅ FIXED
 - **Problem**: LLM generates generic descriptions like "Prepare response", "Launch Windows Explorer" that couldn't be mapped to system actions
@@ -29,17 +29,17 @@ This fix addresses three critical blocking issues preventing real actions from r
 
 ## Files Modified
 
-### 1. src/jarvis/orchestrator.py
+### 1. src/spectral/orchestrator.py
 - **Line 103**: Fixed dependency checking to handle dict results
 - **Lines 176-222**: Enhanced `_execute_step()` to distinguish informational vs unparseable steps
 - **Lines 397-432**: Added application launch parsing with common Windows apps
 - **Lines 505-531**: Added informational/planning step detection with `_informational` flag
 - **Lines 533-547**: Added tool-based fallback handling
 
-### 2. src/jarvis/sqlite_backend.py
+### 2. src/spectral/sqlite_backend.py
 - **Line 84**: Added `check_same_thread=False` to sqlite3.connect()
 
-### 3. src/jarvis/system_actions/files.py
+### 3. src/spectral/system_actions/files.py
 - **Line 68**: Changed to use keyword arguments: `list_files(directory=x, recursive=y)`
 - **Lines 159-203**: Added missing `execution_time_ms=0.0` to all ActionResult returns in get_file_info()
 

@@ -17,27 +17,27 @@ This caused infinite recursion when `configure()` was called, leading to Recursi
 
 ## Files Fixed
 
-### 1. src/jarvis/gui/live_code_editor.py (Line 231)
+### 1. src/spectral/gui/live_code_editor.py (Line 231)
 - **Before**: `self.configure(fg_color=kwargs["fg_color"])`
 - **After**: `super().configure(**kwargs)`
 
-### 2. src/jarvis/gui/deployment_panel.py (Line 265)
+### 2. src/spectral/gui/deployment_panel.py (Line 265)
 - **Before**: `self.configure(fg_color=kwargs["fg_color"])`
 - **After**: `super().configure(**kwargs)`
 
-### 3. src/jarvis/gui/execution_console.py (Line 196)
+### 3. src/spectral/gui/execution_console.py (Line 196)
 - **Before**: `self.configure(fg_color=kwargs["fg_color"])`
 - **After**: `super().configure(**kwargs)`
 
-### 4. src/jarvis/gui/test_results_viewer.py (Line 280)
+### 4. src/spectral/gui/test_results_viewer.py (Line 280)
 - **Before**: `self.configure(fg_color=kwargs["fg_color"])`
 - **After**: `super().configure(**kwargs)`
 
-### 5. src/jarvis/gui/status_panel.py (Line 241)
+### 5. src/spectral/gui/status_panel.py (Line 241)
 - **Before**: `self.configure(fg_color=kwargs["fg_color"])`
 - **After**: `super().configure(**kwargs)`
 
-### 6. src/jarvis/gui/sandbox_viewer.py
+### 6. src/spectral/gui/sandbox_viewer.py
 - **Status**: Already correct - no recursion bug
 
 ## Correct Pattern

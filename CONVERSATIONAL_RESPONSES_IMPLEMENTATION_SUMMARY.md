@@ -1,11 +1,11 @@
 # Conversational Responses Implementation Summary
 
 ## Overview
-This implementation adds natural conversational responses to Jarvis while keeping all planning and execution steps intact. Jarvis now distinguishes between casual conversation and commands, responding naturally in both cases.
+This implementation adds natural conversational responses to Spectral while keeping all planning and execution steps intact. Spectral now distinguishes between casual conversation and commands, responding naturally in both cases.
 
 ## Files Created
 
-### 1. `src/jarvis/response_generator.py`
+### 1. `src/spectral/response_generator.py`
 **Purpose**: Generates natural conversational responses based on intent
 
 **Key Features**:
@@ -25,8 +25,8 @@ response = generator.generate_response(
 # Returns: "Hi there! I'm doing great, thanks for asking! How can I help you today?"
 ```
 
-### 2. `src/jarvis/utils.py`
-**Purpose**: Utility functions for Jarvis
+### 2. `src/spectral/utils.py`
+**Purpose**: Utility functions for Spectral
 
 **Key Features**:
 - `clean_code()`: Strips markdown code formatting (```) from generated code
@@ -34,7 +34,7 @@ response = generator.generate_response(
 
 **Example Usage**:
 ```python
-from jarvis.utils import clean_code
+from spectral.utils import clean_code
 
 code = "```python\nprint('hello')\n```"
 cleaned = clean_code(code)
@@ -43,7 +43,7 @@ cleaned = clean_code(code)
 
 ## Files Modified
 
-### 3. `src/jarvis/intent_classifier.py`
+### 3. `src/spectral/intent_classifier.py`
 **Changes**:
 - Added `CASUAL` and `COMMAND` enum values
 - Added `classify_intent()` convenience method that maps CHAT->casual, ACTION->command
@@ -51,7 +51,7 @@ cleaned = clean_code(code)
 - Enhanced action keywords to include: code, python, javascript, java, function, class
 - Refined chat patterns to better distinguish casual vs command (e.g., "tell me a joke" is casual, "tell me to write" is command)
 
-### 4. `src/jarvis/chat.py`
+### 4. `src/spectral/chat.py`
 **Changes**:
 - Added imports for `IntentClassifier` and `ResponseGenerator`
 - Modified `ChatSession.__init__()` to accept optional `intent_classifier` and `response_generator` parameters
@@ -61,29 +61,29 @@ cleaned = clean_code(code)
   - Display it as "💬 Response:" at the very end
   - Update stored message with full response including conversational part
 
-### 5. `src/jarvis/app.py`
+### 5. `src/spectral/app.py`
 **Changes**:
 - Added imports for `IntentClassifier` and `ResponseGenerator`
 - Modified `GUIApp.__init__()` to:
   - Initialize `IntentClassifier` and `ResponseGenerator`
   - Pass them to `ChatSession`
 
-### 6. `src/jarvis/direct_executor.py`
+### 6. `src/spectral/direct_executor.py`
 **Changes**:
 - Added import for `clean_code` from `utils`
 - Modified `generate_code()` to clean markdown formatting from LLM-generated code
 
-### 7. `src/jarvis/execution_monitor.py`
+### 7. `src/spectral/execution_monitor.py`
 **Changes**:
 - Added import for `clean_code` from `utils`
 - Modified `execute_step()` to clean markdown formatting from code before execution
 
-### 8. `src/jarvis/adaptive_fixing.py`
+### 8. `src/spectral/adaptive_fixing.py`
 **Changes**:
 - Added import for `clean_code` from `utils`
 - Modified `generate_fix()` to clean markdown formatting from generated fixes
 
-### 9. `src/jarvis/dual_execution_orchestrator.py`
+### 9. `src/spectral/dual_execution_orchestrator.py`
 **Changes**:
 - Added import for `clean_code` from `utils`
 - Modified `_generate_step_code()` to clean markdown formatting from generated code
@@ -142,7 +142,7 @@ User: "create a file on desktop with contents test123"
 ### Casual Indicators
 - Starts with: "hello", "hi", "hey", "how are", "what's your name"
 - Contains: "how are you", "how can you help", "tell me a joke"
-- Questions about Jarvis itself
+- Questions about Spectral itself
 - Greetings and small talk
 
 ### Command Indicators

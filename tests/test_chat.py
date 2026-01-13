@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from jarvis.chat import ChatMessage, ChatSession
-from jarvis.reasoning import Plan, PlanStep, PlanValidationResult, SafetyFlag
+from spectral.chat import ChatMessage, ChatSession
+from spectral.reasoning import Plan, PlanStep, PlanValidationResult, SafetyFlag
 
 
 class TestChatMessage:
@@ -233,7 +233,7 @@ class TestChatSession:
         """Test processing a command successfully."""
         chat_session.reasoning_module = mock_reasoning_module
 
-        response = chat_session.process_command("Hello Jarvis")
+        response = chat_session.process_command("Hello Spectral")
 
         assert len(chat_session.history) == 2  # user + assistant
         assert chat_session.history[0].role == "user"
@@ -247,9 +247,7 @@ class TestChatSession:
         assert chat_session.history[0].role == "user"
         assert chat_session.history[1].role == "assistant"
 
-    def test_process_command_with_exception(
-        self, mock_orchestrator: MagicMock
-    ) -> None:
+    def test_process_command_with_exception(self, mock_orchestrator: MagicMock) -> None:
         """Test processing command that raises exception."""
         mock_orchestrator.handle_command.side_effect = Exception("Test error")
         session = ChatSession(orchestrator=mock_orchestrator)
@@ -345,7 +343,6 @@ class TestChatSession:
         exit_code = chat_session.run_interactive_loop()
         assert exit_code == 1
 
-
     def test_process_command_stream_yields_chunks(
         self, mock_orchestrator: MagicMock, mock_reasoning_module: MagicMock
     ) -> None:
@@ -353,9 +350,9 @@ class TestChatSession:
         session = ChatSession(
             orchestrator=mock_orchestrator, reasoning_module=mock_reasoning_module
         )
-        
+
         chunks = list(session.process_command_stream("Test command"))
-        
+
         assert len(chunks) > 0
         assert any("📋" in chunk or "[Executing" in chunk for chunk in chunks)
 
@@ -366,9 +363,9 @@ class TestChatSession:
         session = ChatSession(
             orchestrator=mock_orchestrator, reasoning_module=mock_reasoning_module
         )
-        
+
         list(session.process_command_stream("Test command"))
-        
+
         assert len(session.history) == 2
         assert session.history[0].role == "user"
         assert session.history[1].role == "assistant"
@@ -379,9 +376,9 @@ class TestChatSession:
     ) -> None:
         """Test process_command_stream without reasoning module."""
         session = ChatSession(orchestrator=mock_orchestrator)
-        
+
         chunks = list(session.process_command_stream("Test"))
-        
+
         assert len(chunks) > 0
         assert len(session.history) == 2
 
@@ -389,9 +386,9 @@ class TestChatSession:
         """Test process_command_stream error handling."""
         mock_orchestrator.handle_command.side_effect = Exception("Test error")
         session = ChatSession(orchestrator=mock_orchestrator)
-        
+
         chunks = list(session.process_command_stream("Test"))
-        
+
         assert len(chunks) > 0
         assert any("Error" in chunk for chunk in chunks)
 
@@ -402,10 +399,10 @@ class TestChatSession:
         session = ChatSession(
             orchestrator=mock_orchestrator, reasoning_module=mock_reasoning_module
         )
-        
+
         chunks = list(session.process_command_stream("Test command"))
         full_response = "".join(chunks)
-        
+
         assert len(full_response) > 0
         assert session.history[1].content == full_response
 

@@ -11,12 +11,12 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from jarvis.config import JarvisConfig, LLMConfig, SafetyConfig, StorageConfig
-from jarvis.llm_client import LLMClient
-from jarvis.memory_rag.rag_service import DocumentChunk, RAGMemoryService, RetrievalResult
-from jarvis.persistent_memory import MemoryModule
-from jarvis.reasoning import Plan, PlanStep, ReasoningModule
-from jarvis.tool_teaching import ToolTeachingModule
+from spectral.config import JarvisConfig, LLMConfig, SafetyConfig, StorageConfig
+from spectral.llm_client import LLMClient
+from spectral.memory_rag.rag_service import DocumentChunk, RAGMemoryService, RetrievalResult
+from spectral.persistent_memory import MemoryModule
+from spectral.reasoning import Plan, PlanStep, ReasoningModule
+from spectral.tool_teaching import ToolTeachingModule
 
 
 @pytest.fixture
@@ -241,9 +241,7 @@ class TestRetrieval:
         )
 
         # Retrieve only tool_knowledge
-        results = rag_service.retrieve(
-            query="content", memory_types=["tool_knowledge"], top_k=10
-        )
+        results = rag_service.retrieve(query="content", memory_types=["tool_knowledge"], top_k=10)
 
         assert all(r.chunk.memory_type == "tool_knowledge" for r in results)
 
@@ -464,7 +462,7 @@ class TestToolTeachingIntegration:
 
     def test_tool_teaching_with_rag(self, temp_storage_dir, mock_llm_client, rag_service):
         """Test tool teaching stores documentation in RAG."""
-        from jarvis.memory import MemoryStore
+        from spectral.memory import MemoryStore
 
         memory_store = MemoryStore(storage_dir=temp_storage_dir / "tool_knowledge")
 
@@ -495,9 +493,7 @@ class TestToolTeachingIntegration:
             assert len(learned_tools) > 0
 
             # Verify documentation is in RAG
-            results = rag_service.retrieve(
-                query="version control", memory_types=["tool_knowledge"]
-            )
+            results = rag_service.retrieve(query="version control", memory_types=["tool_knowledge"])
 
             assert len(results) > 0
 

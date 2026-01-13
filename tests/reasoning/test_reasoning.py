@@ -3,8 +3,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from jarvis.config import JarvisConfig
-from jarvis.reasoning import PlanningResponseError, ReasoningModule
+from spectral.config import JarvisConfig
+from spectral.reasoning import PlanningResponseError, ReasoningModule
 
 # Configure logging to capture output during tests
 logging.basicConfig(level=logging.DEBUG)

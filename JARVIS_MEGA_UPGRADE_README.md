@@ -1,8 +1,8 @@
-# Jarvis Mega-Upgrade Implementation
+# Spectral Mega-Upgrade Implementation
 
 ## Overview
 
-This mega-upgrade transforms Jarvis from a basic code executor into a truly autonomous, intelligent, transparent AI assistant with:
+This mega-upgrade transforms Spectral from a basic code executor into a truly autonomous, intelligent, transparent AI assistant with:
 
 - **Sandbox Isolation**: Safe code generation and testing
 - **Auto-Testing**: Intelligent test generation for interactive programs
@@ -274,7 +274,7 @@ Or enable programmatically:
 debugger = ExecutionDebugger(enabled=True)
 ```
 
-Logs are written to: `~/.jarvis/logs/execution_debug.log`
+Logs are written to: `~/.spectral/logs/execution_debug.log`
 
 ## Acceptance Criteria Status
 
@@ -301,8 +301,8 @@ Logs are written to: `~/.jarvis/logs/execution_debug.log`
 ### Basic Usage
 
 ```python
-from jarvis.sandbox_execution_system import SandboxExecutionSystem
-from jarvis.llm_client import LLMClient
+from spectral.sandbox_execution_system import SandboxExecutionSystem
+from spectral.llm_client import LLMClient
 
 # Initialize
 llm_client = LLMClient()
@@ -383,7 +383,7 @@ ls -la /tmp/jarvis_sandbox_*
 ### Tests Failing
 Enable debug logging:
 ```python
-from jarvis.execution_debugger import ExecutionDebugger
+from spectral.execution_debugger import ExecutionDebugger
 debugger = ExecutionDebugger(enabled=True)
 debugger.get_session_logs(session_id)
 ```
@@ -398,7 +398,7 @@ Or configure alternative in `config.yaml`.
 
 ## Conclusion
 
-This mega-upgrade transforms Jarvis into a production-quality autonomous AI assistant with:
+This mega-upgrade transforms Spectral into a production-quality autonomous AI assistant with:
 - **Safety**: Sandboxed execution prevents side effects
 - **Reliability**: 10 retry strategies with learning
 - **Transparency**: Full logging and GUI integration
