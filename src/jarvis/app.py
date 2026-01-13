@@ -148,9 +148,19 @@ class GUIApp(customtkinter.CTk):
         )
         chat_title.pack(pady=5)
 
-        self.chat_text = customtkinter.CTkTextbox(self.main_frame, text_color="white")
+        # Use standard tk.Text instead of CTkTextbox to support tags for coloring
+        self.chat_text = tk.Text(
+            self.main_frame,
+            background=self._get_dark_bg_color(),
+            foreground="white",
+            insertbackground="white",
+            font=("Arial", 11),
+            wrap="word",
+            state="disabled",
+        )
         self.chat_text.pack(fill="both", expand=True, pady=5)
-        self.chat_text.configure(state="disabled")
+        # Configure tag for user messages (blue color)
+        self.chat_text.tag_configure("user_message", foreground="#1E90FF")
 
         # Plan/Execution status
         status_frame = customtkinter.CTkFrame(self.main_frame)
@@ -230,6 +240,16 @@ class GUIApp(customtkinter.CTk):
         except RuntimeError:
             logger.debug("Skipping UI update; GUI likely shutting down")
 
+    def _get_dark_bg_color(self) -> str:
+        """
+        Get the dark background color matching CustomTkinter theme.
+
+        Returns:
+            Hex color string for dark background
+        """
+        # CustomTkinter dark theme uses #333333 for frames
+        return "#333333"
+
     def get_gui_callback(self) -> Callable[[str, dict[str, Any]], None]:
         """
         Return callback for sandbox execution system.
@@ -279,7 +299,6 @@ class GUIApp(customtkinter.CTk):
             self.chat_text.configure(state="normal")
             self.chat_text.insert("end", f"[User] {command}\n", "user_message")
             self.chat_text.insert("end", "\n")
-            self.chat_text.tag_configure("user_message", foreground="#1E90FF")
             self.chat_text.see("end")
             self.chat_text.configure(state="disabled")
 
