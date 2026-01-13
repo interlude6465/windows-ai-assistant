@@ -56,11 +56,26 @@ class DualExecutionOrchestrator:
         self.direct_executor = DirectExecutor(
             llm_client, self.mistake_learner, memory_module, gui_callback
         )
-        self.code_step_breakdown = CodeStepBreakdown(llm_client)
+        self.code_step_breakdown = CodeStepBreakdown(llm_client, gui_callback)
         self.execution_monitor = ExecutionMonitor()
         self.execution_monitor.set_gui_callback(gui_callback)
-        self.adaptive_fix_engine = AdaptiveFixEngine(llm_client, self.mistake_learner)
+        self.adaptive_fix_engine = AdaptiveFixEngine(llm_client, self.mistake_learner, gui_callback)
         logger.info("DualExecutionOrchestrator initialized")
+
+    def set_gui_callback(self, gui_callback: Optional[callable] = None) -> None:
+        """
+        Set the GUI callback for sandbox viewer updates.
+
+        Args:
+            gui_callback: Optional callback function
+        """
+        self.gui_callback = gui_callback
+        # Propagate to all components
+        self.direct_executor.gui_callback = gui_callback
+        self.code_step_breakdown.gui_callback = gui_callback
+        self.execution_monitor.set_gui_callback(gui_callback)
+        self.adaptive_fix_engine.gui_callback = gui_callback
+        logger.debug("GUI callback set for all components")
 
     def process_request(
         self, user_input: str, max_attempts: Optional[int] = None
@@ -140,7 +155,19 @@ class DualExecutionOrchestrator:
                 # Generate code for this step if needed
                 if not step.code:
                     yield "   Generating code...\n"
+                    # Emit code generation started event
+                    if self.gui_callback:
+                        try:
+                            self.gui_callback("code_generation_started", {})
+                        except Exception as e:
+                            logger.debug(f"GUI callback error: {e}")
                     step.code = self._generate_step_code(step, user_input)
+                    # Emit code generation complete event
+                    if self.gui_callback:
+                        try:
+                            self.gui_callback("code_generation_complete", {})
+                        except Exception as e:
+                            logger.debug(f"GUI callback error: {e}")
                     yield "   ✓ Code generated\n"
 
                 attempt = 1
@@ -209,9 +236,21 @@ class DualExecutionOrchestrator:
                             diagnosis.suggested_fix = "Rewrite using only Python standard library"
 
                         yield "   Applying fix...\n"
+                        # Emit code generation started event
+                        if self.gui_callback:
+                            try:
+                                self.gui_callback("code_generation_started", {})
+                            except Exception as e:
+                                logger.debug(f"GUI callback error: {e}")
                         fixed_code = self.adaptive_fix_engine.generate_fix(
                             step, diagnosis, attempt - 1
                         )
+                        # Emit code generation complete event
+                        if self.gui_callback:
+                            try:
+                                self.gui_callback("code_generation_complete", {})
+                            except Exception as e:
+                                logger.debug(f"GUI callback error: {e}")
                         step.code = fixed_code
                         step.status = "retrying"
 
@@ -275,8 +314,18 @@ Requirements:
 Return only the code, no markdown formatting, no explanations."""
 
         try:
-            raw_code = self.llm_client.generate(prompt)
-            code = clean_code(str(raw_code))
+            # Use streaming to display code as it generates
+            full_code = ""
+            for chunk in self.llm_client.generate_stream(prompt):
+                full_code += chunk
+                # Emit code chunk event for real-time display in sandbox viewer
+                if self.gui_callback:
+                    try:
+                        self.gui_callback("code_chunk_generated", {"chunk": chunk})
+                    except Exception as e:
+                        logger.debug(f"GUI callback error: {e}")
+
+            code = clean_code(str(full_code))
             logger.debug(f"Generated code for step {step.step_number}: {len(code)} characters")
             return str(code)
         except Exception as e:

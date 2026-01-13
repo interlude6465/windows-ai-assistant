@@ -208,6 +208,7 @@ def main(argv: Optional[list] = None) -> int:
             intent_classifier=intent_classifier,
             response_generator=response_generator,
             memory_module=memory_module,
+            gui_callback=None,  # CLI mode has no GUI callback
         )
         return chat_session.run_interactive_loop()
 

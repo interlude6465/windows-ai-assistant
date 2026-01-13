@@ -101,9 +101,15 @@ class DirectExecutor:
         prompt = self._build_code_generation_prompt(user_request, language, learned_patterns)
 
         try:
-            code = self.llm_client.generate(prompt)
+            # Use streaming to display code as it generates
+            full_code = ""
+            for chunk in self.llm_client.generate_stream(prompt):
+                full_code += chunk
+                # Emit code chunk event for real-time display in sandbox viewer
+                self._emit_gui_event("code_chunk_generated", {"chunk": chunk})
+
             # Clean markdown formatting from generated code
-            cleaned_code = clean_code(str(code))
+            cleaned_code = clean_code(str(full_code))
 
             # Handle desktop save request
             if save_to_desktop:
@@ -111,8 +117,7 @@ class DirectExecutor:
 
             logger.debug(f"Generated {len(cleaned_code)} characters of {language} code")
 
-            # Emit code generated event to sandbox viewer
-            self._emit_gui_event("code_generated", {"code": cleaned_code})
+            # Emit code generation complete event to sandbox viewer
             self._emit_gui_event("code_generation_complete", {})
 
             return str(cleaned_code)

@@ -188,6 +188,7 @@ class SandboxViewer(ctk.CTkFrame):
     # Event handlers
     def _on_code_generation_started(self, data: dict) -> None:
         """Handle code generation started."""
+        # Clear previous code before starting new generation
         self.code_editor.clear()
         self.execution_console.log_info("Code generation started...")
         self.status_panel.start_timer()
@@ -199,12 +200,18 @@ class SandboxViewer(ctk.CTkFrame):
             self.code_editor.append_code(chunk)
 
     def _on_code_generated(self, data: dict) -> None:
-        """Handle code generated."""
-        code = data.get("code", "")
-        if code:
-            self.code_editor.set_code(code)
-            line_count = len(code.split("\n"))
-            self.execution_console.log_info(f"Code generated ({line_count} lines)")
+        """Handle code generated (legacy event - for non-streaming mode)."""
+        # Only set code if code editor is empty (means streaming didn't work)
+        current_code = self.code_editor.get_code()
+        if not current_code.strip():
+            code = data.get("code", "")
+            if code:
+                self.code_editor.set_code(code)
+                line_count = len(code.split("\n"))
+                self.execution_console.log_info(f"Code generated ({line_count} lines)")
+        else:
+            # Code already streamed, just log completion
+            self.execution_console.log_info("Code generated")
 
     def _on_code_generation_complete(self, data: dict) -> None:
         """Handle code generation complete."""

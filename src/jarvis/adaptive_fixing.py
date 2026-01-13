@@ -36,7 +36,10 @@ class AdaptiveFixEngine:
     """
 
     def __init__(
-        self, llm_client: LLMClient, mistake_learner: Optional[MistakeLearner] = None
+        self,
+        llm_client: LLMClient,
+        mistake_learner: Optional[MistakeLearner] = None,
+        gui_callback: Optional[callable] = None,
     ) -> None:
         """
         Initialize adaptive fix engine.
@@ -44,12 +47,28 @@ class AdaptiveFixEngine:
         Args:
             llm_client: LLM client for diagnosis and fix generation
             mistake_learner: Mistake learner for storing and retrieving patterns
+            gui_callback: Optional callback for sandbox viewer updates
         """
         self.llm_client = llm_client
         self.mistake_learner = mistake_learner or MistakeLearner()
+        self.gui_callback = gui_callback
         self.default_max_retries: Optional[int] = None
         self.retry_history: dict[str, RetryHistoryEntry] = {}
         logger.info("AdaptiveFixEngine initialized with unlimited retries by default")
+
+    def _emit_gui_event(self, event_type: str, data: dict) -> None:
+        """
+        Emit an event to the GUI callback (sandbox viewer).
+
+        Args:
+            event_type: Type of event
+            data: Event data dictionary
+        """
+        if self.gui_callback:
+            try:
+                self.gui_callback(event_type, data)
+            except Exception as e:
+                logger.debug(f"GUI callback error: {e}")
 
     def diagnose_failure(
         self,
@@ -126,9 +145,15 @@ class AdaptiveFixEngine:
         prompt = self._build_fix_prompt(step, diagnosis, retry_count)
 
         try:
-            raw_code = self.llm_client.generate(prompt)
+            # Use streaming to display code as it generates
+            full_code = ""
+            for chunk in self.llm_client.generate_stream(prompt):
+                full_code += chunk
+                # Emit code chunk event for real-time display in sandbox viewer
+                self._emit_gui_event("code_chunk_generated", {"chunk": chunk})
+
             # Clean markdown formatting from generated code
-            fixed_code = clean_code(str(raw_code))
+            fixed_code = clean_code(str(full_code))
             logger.debug(f"Generated fix length: {len(fixed_code)} characters")
             return str(fixed_code)
         except Exception as e:

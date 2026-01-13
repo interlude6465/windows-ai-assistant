@@ -79,6 +79,7 @@ class ChatSession:
         intent_classifier: Optional[IntentClassifier] = None,
         response_generator: Optional[ResponseGenerator] = None,
         memory_module: Optional[MemoryModule] = None,
+        gui_callback: Optional[callable] = None,
     ) -> None:
         """
         Initialize a chat session.
@@ -92,6 +93,7 @@ class ChatSession:
             intent_classifier: Optional intent classifier for distinguishing casual vs command
             response_generator: Optional response generator for conversational responses
             memory_module: Optional memory module for persistent conversation and execution tracking
+            gui_callback: Optional callback for sandbox viewer updates
         """
         self.orchestrator = orchestrator
         self.reasoning_module = reasoning_module
@@ -99,6 +101,14 @@ class ChatSession:
         self.controller = controller
         self.dual_execution_orchestrator = dual_execution_orchestrator
         self.memory_module = memory_module
+        self.gui_callback = gui_callback
+
+        # Set GUI callback on dual execution orchestrator if available
+        if self.dual_execution_orchestrator and hasattr(
+            self.dual_execution_orchestrator, "set_gui_callback"
+        ):
+            self.dual_execution_orchestrator.set_gui_callback(gui_callback)
+            logger.debug("GUI callback set on dual execution orchestrator")
         self.history: List[ChatMessage] = []
         self.is_running = False
         self.execution_history: List[ExecutionMemory] = []

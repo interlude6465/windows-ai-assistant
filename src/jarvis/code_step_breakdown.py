@@ -24,16 +24,32 @@ class CodeStepBreakdown:
     Output: List of CodeStep objects with dependencies and validation methods
     """
 
-    def __init__(self, llm_client: LLMClient) -> None:
+    def __init__(self, llm_client: LLMClient, gui_callback: Optional[callable] = None) -> None:
         """
         Initialize code step breakdown.
 
         Args:
             llm_client: LLM client for generating step breakdowns
+            gui_callback: Optional callback for sandbox viewer updates
         """
         self.llm_client = llm_client
+        self.gui_callback = gui_callback
         self._step_counter = 0
         logger.info("CodeStepBreakdown initialized")
+
+    def _emit_gui_event(self, event_type: str, data: dict) -> None:
+        """
+        Emit an event to the GUI callback (sandbox viewer).
+
+        Args:
+            event_type: Type of event
+            data: Event data dictionary
+        """
+        if self.gui_callback:
+            try:
+                self.gui_callback(event_type, data)
+            except Exception as e:
+                logger.debug(f"GUI callback error: {e}")
 
     def breakdown_request(self, user_request: str) -> List[CodeStep]:
         """

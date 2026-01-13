@@ -72,6 +72,7 @@ class GUIApp(customtkinter.CTk):
             intent_classifier=self.intent_classifier,
             response_generator=self.response_generator,
             memory_module=memory_module,
+            gui_callback=self.get_gui_callback(),
         )
 
         # GUI state
