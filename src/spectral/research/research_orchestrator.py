@@ -10,8 +10,9 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
+from spectral.config import JarvisConfig, SpectralConfig
 from spectral.llm_client import LLMClient
 from spectral.research.fetcher import SmartFetcher
 from spectral.research.knowledge_pack import FetchResult, KnowledgePack, SourceEvidence
@@ -35,6 +36,7 @@ class ResearchOrchestrator:
     def __init__(
         self,
         cache_db_path: Optional[Path] = None,
+        config: Optional[Union[SpectralConfig, JarvisConfig]] = None,
         enable_playwright: bool = False,
         llm_client: Optional[LLMClient] = None,
     ):
@@ -42,9 +44,12 @@ class ResearchOrchestrator:
         Initialize research orchestrator.
 
         Args:
-            cache_db_path: Path to cache database (defaults to ~/.spectral/research_cache.db)
+            cache_db_path: Path to cache database (defaults to
+                ~/.spectral/research_cache.db)
+            config: Spectral/Jarvis configuration (for LLM client creation)
             enable_playwright: Whether to enable Playwright for JS-heavy pages
-            llm_client: LLM client for synthesis (creates default if None)
+            llm_client: LLM client for synthesis (lazy-loaded from config if
+                None)
         """
         if cache_db_path is None:
             cache_dir = Path.home() / ".spectral" / "cache"
@@ -52,9 +57,10 @@ class ResearchOrchestrator:
             cache_db_path = cache_dir / "research_cache.db"
 
         self.cache_db_path = cache_db_path
+        self.config = config
+        self._llm_client = llm_client  # Allow injection for testing
         self.search_provider = SearchProviderChain()
         self.fetcher = SmartFetcher(enable_playwright=enable_playwright)
-        self.llm_client = llm_client or LLMClient()
 
         self._init_cache_db()
 
@@ -236,12 +242,19 @@ class ResearchOrchestrator:
         """
         logger.info("Synthesizing knowledge pack with LLM")
 
+        # Lazy-load LLM client if not provided
+        if not self._llm_client:
+            if not self.config:
+                raise ValueError("config required for LLM synthesis when llm_client not provided")
+            self._llm_client = LLMClient(self.config.llm)
+            logger.info("LLM client lazy-loaded for research synthesis")
+
         pages_summary = self._prepare_pages_for_synthesis(fetched_pages)
 
         prompt = self._build_synthesis_prompt(query, pages_summary)
 
         try:
-            response = self.llm_client.generate(prompt)
+            response = self._llm_client.generate(prompt)
             pack_data = self._parse_llm_response(response, query, fetched_pages)
             return pack_data
 
