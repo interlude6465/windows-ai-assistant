@@ -492,16 +492,17 @@ class ChatSession:
         # If this is casual conversation, generate response directly without execution
         if intent == "casual":
             logger.debug("Casual conversation detected, using direct response generation")
-            response: str = self.response_generator.generate_response(
-                intent="casual", execution_result="", original_input=user_input
-            )
 
-            # Build context from memory for casual responses
+            # Build context from memory for casual responses (used internally, not displayed)
             memory_context = self._build_context_from_memory(user_input)
 
-            # If we have memory context, append it to the response
-            if memory_context:
-                response = f"{response}\n\n{memory_context}"
+            # Generate response with memory context for context-aware responses
+            response: str = self.response_generator.generate_response(
+                intent="casual",
+                execution_result="",
+                original_input=user_input,
+                memory_context=memory_context,
+            )
 
             # Add to history
             context = self.get_context_summary()
@@ -628,16 +629,16 @@ class ChatSession:
         # If this is casual conversation, generate response directly without execution
         if intent == "casual":
             logger.debug("Casual conversation detected, using direct response generation")
-            response: str = self.response_generator.generate_response(
-                intent="casual", execution_result="", original_input=user_input
-            )
-
-            # Build context from memory for casual responses
+            # Build context from memory for casual responses (used internally, not displayed)
             memory_context = self._build_context_from_memory(user_input)
 
-            # If we have memory context, append it to the response
-            if memory_context:
-                response = f"{response}\n\n{memory_context}"
+            # Generate response with memory context for context-aware responses
+            response: str = self.response_generator.generate_response(
+                intent="casual",
+                execution_result="",
+                original_input=user_input,
+                memory_context=memory_context,
+            )
 
             # Add to history and return
             context = self.get_context_summary()
