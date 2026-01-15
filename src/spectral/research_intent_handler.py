@@ -6,8 +6,9 @@ web research and optional execution.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Union
 
+from spectral.config import JarvisConfig, SpectralConfig
 from spectral.execution_models import ExecutionMode
 from spectral.execution_router import ExecutionRouter
 from spectral.research import KnowledgePack, ResearchOrchestrator
@@ -18,14 +19,21 @@ logger = logging.getLogger(__name__)
 class ResearchIntentHandler:
     """Handle research intents from user queries."""
 
-    def __init__(self, research_orchestrator: Optional[ResearchOrchestrator] = None):
+    def __init__(
+        self,
+        config: Optional[Union[SpectralConfig, JarvisConfig]] = None,
+        research_orchestrator: Optional[ResearchOrchestrator] = None,
+    ):
         """
         Initialize research intent handler.
 
         Args:
-            research_orchestrator: ResearchOrchestrator instance (creates default if None)
+            config: Spectral/Jarvis configuration (for ResearchOrchestrator
+                initialization)
+            research_orchestrator: ResearchOrchestrator instance (creates default
+                from config if None)
         """
-        self.research_orchestrator = research_orchestrator or ResearchOrchestrator()
+        self.research_orchestrator = research_orchestrator or ResearchOrchestrator(config=config)
         self.router = ExecutionRouter()
         logger.info("ResearchIntentHandler initialized")
 

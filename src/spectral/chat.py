@@ -127,7 +127,7 @@ class ChatSession:
             self.reference_resolver = None
 
         # Initialize research handler and execution router
-        self.research_handler = ResearchIntentHandler()
+        self.research_handler = ResearchIntentHandler(config=config)
         self.execution_router = ExecutionRouter()
 
     def add_message(

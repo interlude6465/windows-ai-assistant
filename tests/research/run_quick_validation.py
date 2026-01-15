@@ -11,6 +11,7 @@ from pathlib import Path
 # Add src to path before imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+from spectral.config import SpectralConfig  # noqa: E402
 from spectral.research import ResearchOrchestrator  # noqa: E402
 
 logging.basicConfig(
@@ -29,7 +30,8 @@ def main():
     query = "How to install Python on Windows"
     logger.info(f"\nQuery: {query}\n")
 
-    orchestrator = ResearchOrchestrator(enable_playwright=False)
+    config = SpectralConfig()
+    orchestrator = ResearchOrchestrator(config=config, enable_playwright=False)
 
     logger.info("Starting research...")
     pack = orchestrator.run_research(query, max_pages=3)
