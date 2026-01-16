@@ -38,7 +38,13 @@ class ResponseGenerator:
         self.conversation_memory = conversation_memory
         logger.info("ResponseGenerator initialized")
 
-    def generate_response(self, intent: str, execution_result: str, original_input: str) -> str:
+    def generate_response(
+        self,
+        intent: str,
+        execution_result: str,
+        original_input: str,
+        memory_context: Optional[str] = None,
+    ) -> str:
         """
         Generate an appropriate response based on intent and context.
 
@@ -46,21 +52,25 @@ class ResponseGenerator:
             intent: "casual" or "command"
             execution_result: Result from execution (for commands)
             original_input: Original user input
+            memory_context: Optional memory context from previous conversations
 
         Returns:
             Generated response string
         """
         if intent == "casual":
-            return self._generate_casual_response(original_input)
+            return self._generate_casual_response(original_input, memory_context)
         else:  # command
-            return self._generate_command_response(original_input, execution_result)
+            return self._generate_command_response(original_input, execution_result, memory_context)
 
-    def _generate_casual_response(self, user_input: str) -> str:
+    def _generate_casual_response(
+        self, user_input: str, memory_context: Optional[str] = None
+    ) -> str:
         """
         Generate a friendly conversational response.
 
         Args:
             user_input: Original user input
+            memory_context: Optional memory context from previous conversations
 
         Returns:
             Friendly conversational response
@@ -81,7 +91,7 @@ class ResponseGenerator:
             return self._get_simple_casual_response(user_input)
 
         # Use LLM to generate natural response
-        prompt = self._build_casual_prompt(user_input)
+        prompt = self._build_casual_prompt(user_input, memory_context)
 
         try:
             response = self.llm_client.generate(prompt)
@@ -103,27 +113,33 @@ class ResponseGenerator:
             Continuation response
         """
         prev_user = context.get("previous_user_message", "")
-        prev_task = context.get("previous_task_type", "")
-        prev_response = context.get("previous_response", "")
 
         # For jokes, tell another joke
         if "joke" in prev_user.lower():
-            return "Here's another one: What do you call a programmer in winter? Dll! 😄 Want another one?"
+            return (
+                "Here's another one: What do you call a programmer in winter? "
+                "Dll! 😄 Want another one?"
+            )
 
         # For stories or facts, provide more content
         if "tell me" in prev_user.lower() or "tell" in prev_user.lower():
             if self.llm_client:
-                prompt = f"""The user said "{prev_user}" and I responded. Now they said "{user_input}".
-
-Continue naturally with more content related to the previous topic.
-Be brief (1-2 sentences) and engaging."""
+                prompt = (
+                    "The user said "
+                    f'"{prev_user}" and I responded. Now they said "{user_input}".\n\n'
+                    "Continue naturally with more content related to "
+                    "the previous topic. Be brief (1-2 sentences) and engaging."
+                )
                 try:
                     response = self.llm_client.generate(prompt)
                     return str(response).strip()
                 except Exception:
                     pass
 
-            return "Sure! Would you like me to tell you something similar or move on to a different topic?"
+            return (
+                "Sure! Would you like me to tell you something similar or "
+                "move on to a different topic?"
+            )
 
         # Default continuation
         return "Here's another one! Let me know if you'd like more or something different."
@@ -283,13 +299,16 @@ Be brief (1-2 sentences) and engaging."""
             "Would you like me to try a different approach or provide more details?"
         )
 
-    def _generate_command_response(self, original_input: str, execution_result: str) -> str:
+    def _generate_command_response(
+        self, original_input: str, execution_result: str, memory_context: Optional[str] = None
+    ) -> str:
         """
         Generate a summary response for commands.
 
         Args:
             original_input: Original user command
             execution_result: Result from execution
+            memory_context: Optional memory context from previous conversations
 
         Returns:
             Summary response
@@ -379,19 +398,25 @@ Be brief (1-2 sentences) and engaging."""
         """Build a neutral summary response."""
         return "I've processed your request. Check the results above for details."
 
-    def _build_casual_prompt(self, user_input: str) -> str:
+    def _build_casual_prompt(self, user_input: str, memory_context: Optional[str] = None) -> str:
         """
         Build prompt for casual conversation response.
 
         Args:
             user_input: User's conversational input
+            memory_context: Optional memory context from previous conversations
 
         Returns:
             Formatted prompt string
         """
+        # Build context section if memory_context is available
+        context_section = ""
+        if memory_context:
+            context_section = f"Context from previous conversations:\n{memory_context}\n\n"
+
         prompt = f"""You are Spectral, a friendly and helpful AI assistant.
 
-The user said: "{user_input}"
+{context_section}The user said: "{user_input}"
 
 Respond naturally and conversationally. Be warm, friendly, and brief.
 Answer their question directly or acknowledge their greeting appropriately.
