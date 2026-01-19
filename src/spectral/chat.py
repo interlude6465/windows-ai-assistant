@@ -205,10 +205,23 @@ class ChatSession:
         Returns:
             Context string from memory
         """
-        if not self.memory_module or not self.memory_search:
-            return ""
+        context_parts = []
 
-        # Get recent conversations
+        # Add recent conversation history from current session
+        if self.history:
+            recent_messages = self.history[-5:]
+            if recent_messages:
+                context_parts.append("Current session conversation:")
+                for msg in recent_messages:
+                    content = msg.content
+                    if len(content) > 150:
+                        content = content[:150] + "..."
+                    context_parts.append(f"- {msg.role.capitalize()}: {content}")
+
+        if not self.memory_module or not self.memory_search:
+            return "\n".join(context_parts) if context_parts else ""
+
+        # Get recent conversations from persistent memory
         recent_conversations = self.memory_module.get_recent_conversations(limit=5)
 
         # Search for related past executions
@@ -217,11 +230,11 @@ class ChatSession:
             user_input, recent_executions, limit=3
         )
 
-        context_parts = []
-
-        # Add recent conversation context
+        # Add recent conversation context from persistent memory
         if recent_conversations:
-            context_parts.append("Recent Context:")
+            if context_parts:
+                context_parts.append("\n")
+            context_parts.append("From previous sessions:")
             recent_context = self.memory_search.get_recent_context(
                 recent_conversations, num_turns=3
             )
@@ -230,7 +243,7 @@ class ChatSession:
 
         # Add relevant past executions
         if relevant_executions:
-            context_parts.append("\n\nRelevant Past Executions:")
+            context_parts.append("\nRelevant past executions:")
             for exec_mem in relevant_executions:
                 context_parts.append(f"- {exec_mem.description}")
                 if exec_mem.file_locations:
@@ -654,29 +667,31 @@ class ChatSession:
             # Build context from memory for casual responses (used internally, not displayed)
             memory_context = self._build_context_from_memory(user_input)
 
-            # Generate response with memory context for context-aware responses
-            response: str = self.response_generator.generate_response(
+            # Stream response with memory context for context-aware responses
+            full_response = ""
+            for chunk in self.response_generator.generate_response_stream(
                 intent="casual",
                 execution_result="",
                 original_input=user_input,
                 memory_context=memory_context,
-            )
+            ):
+                full_response += chunk
+                yield chunk
 
-            # Add to history and return
+            # Add to history
             context = self.get_context_summary()
             self.add_message("user", user_input, metadata={"context": context, "intent": intent})
             self.add_message(
-                "assistant", response, metadata={"intent": intent, "skip_execution": True}
+                "assistant", full_response, metadata={"intent": intent, "skip_execution": True}
             )
 
             # Save conversation to memory
             self._save_to_memory(
                 user_message=user_input,
-                assistant_response=response,
+                assistant_response=full_response,
                 execution_history=[],
             )
 
-            yield response
             return
 
         max_attempts = parse_retry_limit(user_input)

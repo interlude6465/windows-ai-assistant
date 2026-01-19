@@ -6,8 +6,9 @@ Generates friendly responses for casual conversation and summaries for commands.
 
 import logging
 import re
-from typing import Optional, Tuple
+from typing import Generator, List, Optional, Tuple
 
+from spectral.capability_system import get_capability_announcement
 from spectral.conversation_context import ConversationContext
 from spectral.llm_client import LLMClient
 
@@ -36,6 +37,7 @@ class ResponseGenerator:
         """
         self.llm_client = llm_client
         self.conversation_memory = conversation_memory
+        self.conversation_history: List[dict] = []
         logger.info("ResponseGenerator initialized")
 
     def generate_response(
@@ -58,9 +60,58 @@ class ResponseGenerator:
             Generated response string
         """
         if intent == "casual":
-            return self._generate_casual_response(original_input, memory_context)
+            response = self._generate_casual_response(original_input, memory_context)
+            self._add_to_history("user", original_input)
+            self._add_to_history("assistant", response)
+            return response
         else:  # command
             return self._generate_command_response(original_input, execution_result, memory_context)
+
+    def generate_response_stream(
+        self,
+        intent: str,
+        execution_result: str,
+        original_input: str,
+        memory_context: Optional[str] = None,
+    ) -> Generator[str, None, None]:
+        """
+        Generate an appropriate response based on intent and context with streaming.
+
+        Args:
+            intent: "casual" or "command"
+            execution_result: Result from execution (for commands)
+            original_input: Original user input
+            memory_context: Optional memory context from previous conversations
+
+        Yields:
+            Response text chunks as they arrive
+        """
+        if intent == "casual":
+            full_response = ""
+            for chunk in self._generate_casual_response_stream(original_input, memory_context):
+                full_response += chunk
+                yield chunk
+
+            self._add_to_history("user", original_input)
+            self._add_to_history("assistant", full_response)
+        else:  # command
+            response = self._generate_command_response(
+                original_input, execution_result, memory_context
+            )
+            yield response
+
+    def _add_to_history(self, role: str, content: str) -> None:
+        """
+        Add a message to conversation history.
+
+        Args:
+            role: Message role (user or assistant)
+            content: Message content
+        """
+        self.conversation_history.append({"role": role, "content": content})
+
+        if len(self.conversation_history) > 20:
+            self.conversation_history = self.conversation_history[-20:]
 
     def _generate_casual_response(
         self, user_input: str, memory_context: Optional[str] = None
@@ -100,6 +151,46 @@ class ResponseGenerator:
         except Exception as e:
             logger.warning(f"Failed to generate LLM response: {e}")
             return self._get_simple_casual_response(user_input)
+
+    def _generate_casual_response_stream(
+        self, user_input: str, memory_context: Optional[str] = None
+    ) -> Generator[str, None, None]:
+        """
+        Generate a friendly conversational response with streaming.
+
+        Args:
+            user_input: Original user input
+            memory_context: Optional memory context from previous conversations
+
+        Yields:
+            Response text chunks as they arrive
+        """
+        logger.debug(f"Generating streaming casual response for: {user_input}")
+
+        # Check for continuation requests if we have conversation memory
+        if self.conversation_memory and self.conversation_memory.detect_continuation_request(
+            user_input
+        ):
+            context = self.conversation_memory.get_continuation_context(user_input)
+            if context:
+                logger.debug("Continuation request detected")
+                yield self._generate_continuation_response(user_input, context)
+                return
+
+        # If no LLM client, provide simple rule-based responses
+        if not self.llm_client:
+            yield self._get_simple_casual_response(user_input)
+            return
+
+        # Use LLM to generate natural response with streaming
+        prompt = self._build_casual_prompt(user_input, memory_context)
+
+        try:
+            for chunk in self.llm_client.generate_stream(prompt):
+                yield chunk
+        except Exception as e:
+            logger.warning(f"Failed to generate streaming LLM response: {e}")
+            yield self._get_simple_casual_response(user_input)
 
     def _generate_continuation_response(self, user_input: str, context: dict) -> str:
         """
@@ -409,18 +500,38 @@ class ResponseGenerator:
         Returns:
             Formatted prompt string
         """
+        # Get capability announcement
+        capabilities = get_capability_announcement()
+
+        # Build conversation history section
+        history_section = ""
+        if self.conversation_history:
+            recent_history = self.conversation_history[-5:]
+            history_lines = []
+            for turn in recent_history:
+                role = turn.get("role", "unknown")
+                content = turn.get("content", "")
+                if len(content) > 200:
+                    content = content[:200] + "..."
+                history_lines.append(f"{role.capitalize()}: {content}")
+
+            if history_lines:
+                history_section = "Recent conversation:\n" + "\n".join(history_lines) + "\n\n"
+
         # Build context section if memory_context is available
         context_section = ""
         if memory_context:
-            context_section = f"Context from previous conversations:\n{memory_context}\n\n"
+            context_section = f"Context from memory:\n{memory_context}\n\n"
 
-        prompt = f"""You are Spectral, a friendly and helpful AI assistant.
+        prompt = f"""{capabilities}
 
-{context_section}The user said: "{user_input}"
+{history_section}{context_section}User: "{user_input}"
 
 Respond naturally and conversationally. Be warm, friendly, and brief.
-Answer their question directly or acknowledge their greeting appropriately.
-Offer to help if relevant.
+If the conversation is continuing (not a fresh greeting), acknowledge what was discussed before.
+Don't use repetitive greetings like "Hello again!" when continuing a conversation.
+Answer their question directly or acknowledge their message appropriately.
+When asked what you can do, mention your actual capabilities (code, files, commands, etc.).
 
 Keep your response under 3 sentences unless they're asking a complex question.
 Be conversational but professional."""
