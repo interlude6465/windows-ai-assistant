@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -727,6 +728,35 @@ class ChatSession:
 
         """
         logger.info(f"Processing user input with streaming: {user_input}")
+
+        # Check if this is a simple program request
+        simple_program_patterns = [
+            r"hello\s+world",
+            r"simple\s+program",
+            r"basic\s+script",
+            r"quick\s+test",
+            r"script\s+to\s+add\s+two\s+numbers",
+        ]
+
+        is_simple_program = any(
+            re.search(pattern, user_input, re.IGNORECASE) for pattern in simple_program_patterns
+        )
+
+        if is_simple_program and self.dual_execution_orchestrator:
+            logger.info(f"Handling as simple program request: {user_input}")
+            yield "📝 Generating and executing simple program...\n\n"
+
+            try:
+                for chunk in self.dual_execution_orchestrator.process_request(
+                    user_input, max_attempts=5
+                ):
+                    if self.is_cancel_requested():
+                        return
+                    yield chunk
+                return
+            except Exception as e:
+                logger.warning(f"Failed to execute as simple program: {e}")
+                # Fall through to regular processing
 
         # Try simple task executor first for immediate results
         simple_executor = SimpleTaskExecutor()

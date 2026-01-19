@@ -6,11 +6,11 @@ without visual inspection using the test_mode contract for Tkinter/CustomTkinter
 """
 
 import logging
-import re
 from pathlib import Path
 from typing import Optional, Tuple
 
 from spectral.llm_client import LLMClient
+from spectral.utils import AUTONOMOUS_CODE_REQUIREMENT
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ class GUITestGenerator:
         self, code: str, program_name: str, framework: str, user_request: str
     ) -> str:
         """Build prompt for test generation."""
-        
+
         # Add test_mode contract enforcement for Tkinter/CustomTkinter
         test_mode_requirements = ""
         if framework in ["tkinter", "customtkinter"]:
@@ -112,21 +112,21 @@ The GUI program MUST follow this exact pattern:
 def create_app(test_mode: bool = False):
     """
     Create and return the GUI application.
-    
+
     Args:
         test_mode: If True, build widget tree but do NOT call mainloop().
                    Return root window + dict of key widgets for testing.
-    
+
     Returns:
         If test_mode=True: (root, widgets_dict)
         If test_mode=False: None (app runs mainloop())
     """
     root = ctk.CTk()  # or tk.Tk() for tkinter
-    
+
     # Build UI...
     button = ctk.CTkButton(root, text="Click me", command=on_button_click)
     label = ctk.CTkLabel(root, text="Hello")
-    
+
     if test_mode:
         return root, {"button": button, "label": label}
     else:
@@ -143,7 +143,9 @@ if __name__ == "__main__":
 If the current code doesn't follow this pattern, regenerate it to follow this exact structure.
 '''
 
-        prompt = f"""Generate a pytest test suite for this GUI program.
+        prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+Generate a pytest test suite for this GUI program.
 
 ORIGINAL REQUEST:
 {user_request}
@@ -163,6 +165,7 @@ REQUIREMENTS:
 2. Use pytest and unittest for testing
 3. Test programmatically - NO visual inspection needed
 4. NO actual GUI windows should open during tests
+5. All test inputs must be hard-coded - NO input() calls
 
 TEST CATEGORIES:
 1. Initialization Tests
@@ -206,7 +209,7 @@ from unittest.mock import Mock, patch
 from {program_name} import create_app
 
 class Test{program_name.title().replace('_', '')}:
-    
+
     def test_initialization(self):
         '''Test program initializes with test_mode=True'''
         root, widgets = create_app(test_mode=True)
@@ -217,7 +220,7 @@ class Test{program_name.title().replace('_', '')}:
             assert "label" in widgets
         finally:
             root.destroy()
-        
+
     def test_button_exists(self):
         '''Test UI elements are created'''
         root, widgets = create_app(test_mode=True)
@@ -227,17 +230,17 @@ class Test{program_name.title().replace('_', '')}:
             assert button.cget("text") == "Click me"
         finally:
             root.destroy()
-            
+
     def test_button_callback(self):
         '''Test click handlers work'''
         root, widgets = create_app(test_mode=True)
         try:
             # Get original label text
             original_text = widgets["label"].cget("text")
-            
+
             # Simulate button click by calling callback directly
             on_button_click()
-            
+
             # Verify state change
             new_text = widgets["label"].cget("text")
             assert new_text != original_text
@@ -269,7 +272,7 @@ from {program_name} import *
 
 class Test{program_name.title().replace('_', '')}:
     '''Basic test suite for {program_name}'''
-    
+
     @patch('tkinter.Tk.mainloop')
     def test_program_can_initialize(self, mock_mainloop):
         '''Test that program can be instantiated without errors'''
@@ -279,7 +282,7 @@ class Test{program_name.title().replace('_', '')}:
             assert True
         except Exception as e:
             pytest.fail(f"Program failed to initialize: {{e}}")
-    
+
     def test_imports_work(self):
         '''Test that all imports are valid'''
         assert True  # If we got here, imports worked

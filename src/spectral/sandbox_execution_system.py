@@ -13,7 +13,7 @@ This module integrates:
 
 import logging
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 from spectral.code_cleaner import CodeCleaner
 from spectral.execution_debugger import ExecutionDebugger
@@ -23,8 +23,9 @@ from spectral.llm_client import LLMClient
 from spectral.mistake_learner import MistakeLearner
 from spectral.output_validator import OutputValidator
 from spectral.program_deployer import ProgramDeployer
-from spectral.sandbox_manager import SandboxRunManager, SandboxResult
+from spectral.sandbox_manager import SandboxRunManager, SandboxState
 from spectral.test_case_generator import TestCaseGenerator
+from spectral.utils import AUTONOMOUS_CODE_REQUIREMENT
 
 logger = logging.getLogger(__name__)
 
@@ -265,9 +266,16 @@ class SandboxExecutionSystem:
         Returns:
             Formatted prompt string
         """
-        prompt = f"""Generate {language} code for the following request:
+        prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
+Task: Generate {language} code for the following request:
 {user_request}
+
+Remember:
+- Hard-code all input values
+- No input() calls
+- Code must run autonomously
+- Produce output immediately
 
 Requirements:
 - Write complete, working code

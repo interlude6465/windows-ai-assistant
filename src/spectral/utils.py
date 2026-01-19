@@ -7,6 +7,172 @@ import logging
 import re
 from typing import List, Tuple
 
+AUTONOMOUS_CODE_REQUIREMENT = """
+⚠️ CRITICAL: Generate FULLY AUTONOMOUS code with NO interactive input() calls.
+
+The code will be executed in a non-interactive environment with NO stdin available.
+If the code calls input(), it will FAIL immediately.
+
+✅ REQUIRED:
+1. Hard-code ALL input values (numbers, strings, file paths, choices)
+2. NEVER use input() or similar interactive functions
+3. For programs needing parameters, embed them directly in the code
+4. The program must execute and produce output without waiting
+
+❌ FORBIDDEN:
+- input()
+- input("prompt")
+- sys.stdin.read()
+- Any other interactive input mechanism
+
+Examples of WRONG vs RIGHT:
+
+❌ WRONG (Will fail):
+```python
+name = input("Enter name: ")
+print(f"Hello {name}")
+```
+
+✅ RIGHT (Will work):
+```python
+name = "John"  # Hard-coded
+print(f"Hello {name}")
+```
+
+❌ WRONG (Interactive):
+```python
+def calculator():
+    num1 = input("First number: ")
+    num2 = input("Second number: ")
+    print(int(num1) + int(num2))
+calculator()
+```
+
+✅ RIGHT (Autonomous):
+```python
+def calculator():
+    num1 = 42
+    num2 = 8
+    result = num1 + num2
+    print(f"{num1} + {num2} = {result}")
+calculator()
+```
+
+❌ WRONG (Asks for choice):
+```python
+import random
+choices = ['rock', 'paper', 'scissors']
+player = input("Choose: ")
+computer = random.choice(choices)
+# ...game logic...
+```
+
+✅ RIGHT (Hard-coded choice):
+```python
+import random
+choices = ['rock', 'paper', 'scissors']
+player = 'rock'  # Hard-coded
+computer = random.choice(choices)
+# ...game logic...
+```
+
+Now generate the code:
+"""
+
+
+class SmartInputHandler:
+    """Intelligently detects and handles input() calls in programs."""
+
+    def detect_and_inject_inputs(self, code: str) -> tuple[str, List[str]]:
+        """
+        Analyzes code for input() calls and returns auto-generated test inputs.
+
+        Returns:
+            (modified_code, test_inputs) - code with input() calls stubbed, and test values
+        """
+        import re
+
+        # Find all input() calls and their prompts
+        input_pattern = r'(\w+)\s*=\s*input\s*\(\s*["\']([^"\']*)["\']'
+        matches = list(re.finditer(input_pattern, code))
+
+        if not matches:
+            return code, []
+
+        test_inputs = []
+
+        # Analyze each input() call
+        for match in matches:
+            var_name = match.group(1)
+            prompt = match.group(2).lower()
+
+            # Intelligently map prompts to test values
+            test_value = self._generate_smart_input(prompt, var_name)
+            test_inputs.append(test_value)
+
+        return code, test_inputs
+
+    def _generate_smart_input(self, prompt: str, var_name: str = "") -> str:
+        """Generate appropriate test input based on prompt content."""
+
+        prompt_lower = prompt.lower()
+
+        # Numbers
+        if any(
+            word in prompt_lower for word in ["number", "count", "amount", "length", "size", "age"]
+        ):
+            return "42"
+
+        # Choices
+        if any(
+            word in prompt_lower
+            for word in ["choice", "option", "select", "choose", "rock paper scissors"]
+        ):
+            if "rock" in prompt_lower:
+                return "rock"
+            elif "yes" in prompt_lower or "no" in prompt_lower:
+                return "yes"
+            else:
+                return "option1"
+
+        # Files
+        if any(word in prompt_lower for word in ["file", "path", "filename", "csv", "txt"]):
+            if "csv" in prompt_lower:
+                return "data.csv"
+            else:
+                return "test.txt"
+
+        # Names/Text
+        if any(word in prompt_lower for word in ["name", "text", "input", "string", "message"]):
+            if "email" in prompt_lower:
+                return "test@example.com"
+            elif "password" in prompt_lower:
+                return "TestPassword123"
+            else:
+                return "TestUser"
+
+        # Operators
+        if any(word in prompt_lower for word in ["operator", "+", "-", "*", "/"]):
+            return "+"
+
+        # Default
+        return "test"
+
+    def inject_test_inputs(self, code: str, test_inputs: List[str]) -> str:
+        """Inject test inputs into code by replacing input() calls."""
+        import re
+
+        modified_code = code
+
+        for test_input in test_inputs:
+            # Replace first input() call with hard-coded value
+            pattern = r"(\w+)\s*=\s*input\s*\([^)]*\)"
+            replacement = f'\\1 = "{test_input}"'
+            modified_code = re.sub(pattern, replacement, modified_code, count=1)
+
+        return modified_code
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -177,7 +343,10 @@ def generate_test_inputs(prompts: List[str]) -> List[str]:
             test_inputs.append("10")
         elif any(word in prompt_lower for word in ["second", "num2", "value2"]):
             test_inputs.append("20")
-        elif any(word in prompt_lower for word in ["number", "num", "count", "quantity", "length", "size"]):
+        elif any(
+            word in prompt_lower
+            for word in ["number", "num", "count", "quantity", "length", "size"]
+        ):
             test_inputs.append("42")
         elif any(word in prompt_lower for word in ["email", "address"]):
             test_inputs.append("test@example.com")

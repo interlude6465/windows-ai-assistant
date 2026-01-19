@@ -278,9 +278,11 @@ class ReasoningModule:
         Returns:
             Formatted prompt for LLM, enriched with relevant knowledge if RAG available
         """
-        base_prompt = f"""
-Generate a detailed execution plan for the following request.
+        base_prompt = f"""Generate a detailed execution plan for the following request.
 Break it down into clear, sequential steps.
+
+⚠️ CRITICAL: Any code generated for these steps MUST be FULLY AUTONOMOUS.
+No interactive input() calls. All inputs must be hard-coded.
 
 Request: {user_input}
 

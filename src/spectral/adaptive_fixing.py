@@ -12,7 +12,7 @@ from spectral.execution_models import CodeStep, FailureDiagnosis
 from spectral.llm_client import LLMClient
 from spectral.mistake_learner import LearningPattern, MistakeLearner
 from spectral.retry_parsing import format_attempt_progress
-from spectral.utils import clean_code
+from spectral.utils import AUTONOMOUS_CODE_REQUIREMENT, clean_code
 
 logger = logging.getLogger(__name__)
 
@@ -362,7 +362,9 @@ class AdaptiveFixEngine:
         )
 
         if is_windows_socket_error:
-            prompt = f"""A subprocess execution failed on Windows with this error:
+            prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+A subprocess execution failed on Windows with this error:
 
 Step Description: {step.description}
 
@@ -404,7 +406,9 @@ Common fix strategies:
 
 Return only valid JSON, no other text."""
         else:
-            prompt = f"""Analyze this code execution failure and provide a detailed diagnosis.
+            prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+Analyze this code execution failure and provide a detailed diagnosis.
 
 Step Description: {step.description}
 
@@ -461,7 +465,9 @@ For simple tasks like calculators, use built-in functions like eval() with prope
 Use built-in modules like re, math, os, sys, json, subprocess, etc. but NO external
 dependencies."""
 
-        prompt = f"""Generate fixed code for this failed step.
+        prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+Generate fixed code for this failed step.
 
 Step Description: {step.description}
 
@@ -482,9 +488,10 @@ Requirements:
 2. Follow the suggested fix strategy
 3. Add better error handling
 4. Make the code more robust
-5. Return only the code, no explanations or markdown formatting
-6. Ensure the code is complete and executable
-7. For simple tasks (calculators, basic scripts), use stdlib-only solutions
+5. Use hard-coded inputs instead of input()
+6. Return only the code, no explanations or markdown formatting
+7. Ensure the code is complete and executable
+8. For simple tasks (calculators, basic scripts), use stdlib-only solutions
 
 Return only the fixed code, no other text."""
         return prompt

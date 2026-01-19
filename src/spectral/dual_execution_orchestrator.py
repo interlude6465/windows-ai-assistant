@@ -18,7 +18,7 @@ from spectral.llm_client import LLMClient
 from spectral.mistake_learner import MistakeLearner
 from spectral.persistent_memory import MemoryModule
 from spectral.retry_parsing import format_attempt_progress, parse_retry_limit
-from spectral.utils import clean_code
+from spectral.utils import AUTONOMOUS_CODE_REQUIREMENT, SmartInputHandler, clean_code
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +144,13 @@ class DualExecutionOrchestrator:
                     step.code = self._generate_step_code(step, user_input)
                     yield "   ✓ Code generated\n"
 
+                # Apply Smart Input Detection & Injection
+                input_handler = SmartInputHandler()
+                step.code, test_inputs = input_handler.detect_and_inject_inputs(step.code)
+                if test_inputs:
+                    yield f"   🧠 Smart Input: Auto-injecting {len(test_inputs)} values\n"
+                    step.code = input_handler.inject_test_inputs(step.code, test_inputs)
+
                 attempt = 1
                 while True:
                     progress = format_attempt_progress(attempt, max_attempts)
@@ -257,23 +264,26 @@ class DualExecutionOrchestrator:
         Returns:
             Generated code
         """
-        prompt = f"""Write Python code to accomplish this step:
+        prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
-Step Description: {step.description}
+Task: Write Python code to accomplish this step:
+{step.description}
 
 Original Request: {user_input}
 
-Requirements:
+Remember:
+- Hard-code all input values
+- No input() calls
+- Code must run autonomously
+- Produce output immediately
+
+General Requirements:
 - Write complete, executable code
 - Include proper error handling
 - Add comments explaining the code
 - Make it production-ready
 - No extra text or explanations, just the code
-- IMPORTANT: For interactive programs, use input() and print(), NOT Tkinter dialogs
-- AVOID: simpledialog.askstring, simpledialog.askfloat, simpledialog.askinteger, tkinter.filedialog
-- Use CLI-based input() instead: input("Enter value: ")
-
-Return only the code, no markdown formatting, no explanations."""
+- Return only the code, no markdown formatting, no explanations."""
 
         try:
             raw_code = self.llm_client.generate(prompt)

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from typing import Callable, Generator, Optional
 
@@ -22,7 +23,14 @@ from spectral.mistake_learner import MistakeLearner
 from spectral.persistent_memory import MemoryModule
 from spectral.retry_parsing import format_attempt_progress, parse_retry_limit
 from spectral.sandbox_manager import SandboxResult, SandboxRunManager
-from spectral.utils import clean_code, detect_input_calls, generate_test_inputs, has_input_calls
+from spectral.utils import (
+    AUTONOMOUS_CODE_REQUIREMENT,
+    SmartInputHandler,
+    clean_code,
+    detect_input_calls,
+    generate_test_inputs,
+    has_input_calls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +341,8 @@ class DirectExecutor:
             yield f"\n❌ Error: Execution timed out after {timeout} seconds"
         except Exception as e:
             logger.error(f"Failed to execute script: {e}")
-            yield f"\n❌ Error: {str(e)}"
+            error_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+            yield f"\n❌ Error: {error_msg}"
 
     def stream_execution(self, script_path: Path, timeout: int = 30) -> Generator[str, None, None]:
         """
@@ -389,7 +398,8 @@ class DirectExecutor:
             yield f"\n❌ Error: Execution timed out after {timeout} seconds"
         except Exception as e:
             logger.error(f"Failed to stream execution: {e}")
-            yield f"\n❌ Error: {str(e)}"
+            error_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+            yield f"\n❌ Error: {error_msg}"
 
     def execute_request(
         self,
@@ -448,7 +458,14 @@ class DirectExecutor:
 
                 yield "   ✓ Code generated\n\n"
 
-                # Detect if code has input() calls
+                # Apply Smart Input Detection & Injection
+                input_handler = SmartInputHandler()
+                code, test_inputs = input_handler.detect_and_inject_inputs(code)
+                if test_inputs:
+                    yield f"🧠 Smart Input: Auto-injecting {len(test_inputs)} test values\n"
+                    code = input_handler.inject_test_inputs(code, test_inputs)
+
+                # Detect if code has input() calls (in case some were not handled by smart injector)
                 has_interactive = has_input_calls(code)
                 input_count, prompts = detect_input_calls(code)
 
@@ -744,7 +761,9 @@ class DirectExecutor:
         is_test_failure = "GUI Tests Failed" in error_output or "FAILED" in error_output
 
         if is_test_failure:
-            prompt = f"""The following {language} GUI code failed automated tests:
+            prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+The following {language} GUI code failed automated tests:
 
 Request: {user_request}
 Attempt: {attempt}
@@ -769,10 +788,13 @@ Analyze the test failures and provide a FIXED version that:
 4. Implements proper state management
 5. Includes variety/randomization where needed
 6. Can be tested programmatically (mock mainloop, testable methods)
+7. Uses hard-coded inputs instead of input()
 
 Return ONLY the complete fixed code, no markdown formatting."""
         else:
-            prompt = f"""The following {language} code failed:
+            prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+The following {language} code failed:
 
 Request: {user_request}
 Attempt: {attempt}
@@ -786,6 +808,7 @@ Analyze the error and provide a FIXED version that:
 2. Maintains the original intent
 3. Uses proper error handling
 4. Includes comments explaining the fix
+5. Uses hard-coded inputs instead of input()
 
 Return ONLY the complete fixed code, no markdown formatting."""
 
@@ -820,54 +843,16 @@ Return ONLY the complete fixed code, no markdown formatting."""
         Returns:
             Formatted prompt string
         """
-        prompt = f"""Write a {language} script that does the following:
+        prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
+Task: Write a {language} script that does the following:
 {user_request}
 
-CRITICAL REQUIREMENTS:
-1. **NO interactive input() calls** - The code must run completely autonomously
-2. **Hard-code all input values** - Don't ask user for input, use example/default values
-3. **For programs that need parameters:**
-   - Instead of: user_input = input("Enter name: ")
-   - Use: name = "John"  # or generate example value
-4. **For file paths:**
-   - Instead of: file = input("Enter file path: ")
-   - Use: file = "data.csv"  # or use a reasonable default path
-5. **For interactive choices:**
-   - Instead of: choice = input("Choose: rock/paper/scissors: ")
-   - Use: choice = "rock"  # hard-code an example
-6. **The code must execute completely without waiting for user input**
-
-EXAMPLES:
-
-❌ BAD (Interactive, won't work):
-```python
-def calculator():
-    num1 = input("Enter first number: ")
-    num2 = input("Enter second number: ")
-    print(num1 + num2)
-```
-✅ GOOD (Autonomous, hard-coded inputs):
-```python
-def calculator():
-    num1 = 42
-    num2 = 8
-    result = num1 + num2
-    print(f"{{num1}} + {{num2}} = {{result}}")
-calculator()
-```
-
-❌ BAD (Asks for file):
-```python
-file = input("Enter CSV file path: ")
-df = pd.read_csv(file)
-```
-✅ GOOD (Uses default or expected path):
-```python
-file = "data.csv"  # or a reasonable default path
-df = pd.read_csv(file)
-print(df)
-```
+Remember:
+- Hard-code all input values
+- No input() calls
+- Code must run autonomously
+- Produce output immediately
 
 General Requirements:
 - Write complete, executable code

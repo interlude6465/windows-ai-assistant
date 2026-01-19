@@ -34,6 +34,13 @@ class SimpleTaskExecutor:
         self.list_files_patterns = ["list", "files", "folder", "directory", "show me"]
         self.read_file_patterns = ["read", "open", "show", "display", "view"]
         self.run_command_patterns = ["run", "execute", "command"]
+        self.simple_program_patterns = [
+            r"hello\s+world",
+            r"simple\s+program",
+            r"basic\s+script",
+            r"quick\s+test",
+            r"script\s+to\s+add\s+two\s+numbers",
+        ]
 
         logger.info("SimpleTaskExecutor initialized")
 
@@ -41,6 +48,10 @@ class SimpleTaskExecutor:
         """Return True if the input should be handled as a simple task."""
 
         user_lower = user_input.lower()
+
+        # Check for simple program requests first (this overrides complex_keywords)
+        if any(re.search(pattern, user_lower) for pattern in self.simple_program_patterns):
+            return True
 
         # Exclude code-generation/development tasks
         complex_keywords = [
@@ -231,12 +242,11 @@ except Exception as e:
         """Generate code to run a command."""
         import re as regex
 
-        # Try to extract command after "run" or "execute" keyword
-        # Patterns: "run whoami", "run dir", "execute ipconfig", etc.
+        # Extract command after "run" keyword
         patterns = [
-            r'run\s+(\w+)',           # "run whoami", "run dir"
-            r'execute\s+(\w+)',       # "execute ipconfig"
-            r'(?:run|execute)\s+(\w+)',  # Either run or execute
+            r"run\s+(\w+)",  # "run whoami", "run dir"
+            r"execute\s+(\w+)",  # "execute ipconfig"
+            r"(?:run|execute)\s+(\w+)",
         ]
 
         command = None
@@ -247,24 +257,70 @@ except Exception as e:
                 break
 
         if command:
-            escaped_command = command.replace("\\", "\\\\").replace('"', '\\"')
-            return rf'''import subprocess
+            # Windows built-in commands that need cmd.exe
+            builtin_commands = {
+                "dir",
+                "echo",
+                "type",
+                "copy",
+                "move",
+                "del",
+                "mkdir",
+                "rmdir",
+                "cd",
+                "cls",
+                "tasklist",
+                "taskkill",
+                "systeminfo",
+                "ipconfig",
+                "whoami",
+                "date",
+                "time",
+                "set",
+                "path",
+                "ver",
+                "vol",
+            }
+
+            command_lower = command.lower()
+
+            if command_lower in builtin_commands:
+                # Use cmd.exe for Windows built-in commands
+                return f"""
+import subprocess
 import sys
 
 try:
-    result = subprocess.run(["{escaped_command}"], capture_output=True, text=True, timeout=30)
+    result = subprocess.run(["cmd", "/c", "{command}"], capture_output=True, text=True, timeout=30)
     print(result.stdout)
 
-    if result.returncode != 0:
+    if result.returncode != 0 and result.stderr:
         print(f"Error: {{result.stderr}}", file=sys.stderr)
-        sys.exit(result.returncode)
 except Exception as e:
     print(f"Error running command: {{str(e)}}", file=sys.stderr)
     sys.exit(1)
-'''
+"""
+            else:
+                # External program
+                return f"""
+import subprocess
+import sys
 
-        return '''print("Please specify a command to run.")
-print("Example: whoami, dir, tasklist, systeminfo")'''
+try:
+    result = subprocess.run(["{command}"], capture_output=True, text=True, timeout=30)
+    print(result.stdout)
+
+    if result.returncode != 0 and result.stderr:
+        print(f"Error: {{result.stderr}}", file=sys.stderr)
+except FileNotFoundError:
+    print(f"Command not found: {command}", file=sys.stderr)
+except Exception as e:
+    print(f"Error running command: {{str(e)}}", file=sys.stderr)
+    sys.exit(1)
+"""
+
+        return """print("Please specify a command to run.")
+print("Example: whoami, dir, tasklist, systeminfo, ipconfig")"""
 
     def _detect_file_path(self, user_input: str) -> bool:
         """Detect if user input contains a file path (by file extension)."""
