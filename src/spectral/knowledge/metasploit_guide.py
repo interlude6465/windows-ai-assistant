@@ -5,9 +5,9 @@ This module provides comprehensive knowledge about Metasploit commands, payloads
 error handling, and best practices for interactive penetration testing guidance.
 """
 
-from typing import Optional
+from typing import Dict, Optional
 
-METASPLOIT_KNOWLEDGE = {
+METASPLOIT_KNOWLEDGE: Dict[str, Dict] = {
     "commands": {
         "msfconsole": {
             "description": "Launch Metasploit framework console",
@@ -94,7 +94,10 @@ METASPLOIT_KNOWLEDGE = {
     },
     "payload_guidance": {
         "meterpreter": {
-            "pros": "Interactive, feature-rich, staged, can upload/download files, escalate privilege",
+            "pros": (
+                "Interactive, feature-rich, staged, can "
+                "upload/download files, escalate privilege"
+            ),
             "cons": "Larger, may trigger antivirus, requires specific architecture match",
             "best_for": "Full system compromise, post-exploitation, privilege escalation",
         },
@@ -146,10 +149,18 @@ METASPLOIT_KNOWLEDGE = {
         "sessions": "List all active sessions",
     },
     "common_gotchas": {
-        "architecture_mismatch": "x86 payload on x64 system fails - Generate correct architecture",
-        "firewall_blocking": "Windows Firewall blocks outbound connection - Disable or add exception",
-        "antivirus_detection": "AV quarantines payload - Try encoding or obfuscation",
-        "staged_vs_stageless": "Staged = smaller initial, two-part; Stageless = larger, one-part",
+        "architecture_mismatch": (  # noqa: E501
+            "x86 payload on x64 system fails - Generate correct architecture"
+        ),
+        "firewall_blocking": (  # noqa: E501
+            "Windows Firewall blocks outbound connection - Disable or add exception"
+        ),
+        "antivirus_detection": (  # noqa: E501
+            "AV quarantines payload - Try encoding or obfuscation"
+        ),
+        "staged_vs_stageless": (  # noqa: E501
+            "Staged = smaller initial, two-part; Stageless = larger, one-part"
+        ),
         "wrong_ip": "LHOST is your attacker IP (where listener runs), not target IP",
         "port_in_use": "Port already bound - Choose different LPORT or kill process using it",
         "connection_timeout": "Listener not running, firewall blocking, or network issue",
