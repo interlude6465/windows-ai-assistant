@@ -88,6 +88,8 @@ class GUIApp(customtkinter.CTk):
         # GUI state
         self._processing = False
         self._current_command = ""
+        self._cancel_requested = False
+        self._cancel_event = threading.Event()
 
         # Configure window
         self.title("Spectral AI Assistant")
@@ -305,6 +307,13 @@ class GUIApp(customtkinter.CTk):
         if self._processing:
             return
 
+        self._cancel_requested = False
+        self._cancel_event = threading.Event()
+        try:
+            self.chat_session.reset_cancel()
+        except Exception:
+            pass
+
         # Display user message in chat BEFORE processing
         def show_user_message():
             self.chat_text.configure(state="normal")
@@ -322,15 +331,18 @@ class GUIApp(customtkinter.CTk):
         self.exec_status.configure(text="Execution: Waiting...", text_color="yellow")
 
         # Run in background thread
-        thread = threading.Thread(target=self._command_thread, args=(command,), daemon=True)
+        cancel_event = self._cancel_event
+        thread = threading.Thread(
+            target=self._command_thread, args=(command, cancel_event), daemon=True
+        )
         thread.start()
 
-    def _command_thread(self, command: str) -> None:
-        """
-        Background thread for processing commands.
+    def _command_thread(self, command: str, cancel_event: threading.Event) -> None:
+        """Background thread for processing commands.
 
         Args:
             command: The command to process
+            cancel_event: Cancellation event for this specific command
         """
         try:
             # Add AI: prefix before streaming response
@@ -342,14 +354,30 @@ class GUIApp(customtkinter.CTk):
 
             self._run_on_ui_thread(_add_ai_prefix)
 
+            cancelled = False
+
             # Stream command output
             for chunk in self.chat_session.process_command_stream(command):
+                if cancel_event.is_set():
+                    cancelled = True
+                    break
+
                 chunk_str = str(chunk)
 
                 def _append_chunk(text: str = chunk_str) -> None:
                     self._append_chat_message(text, is_streaming=True)
 
                 self._run_on_ui_thread(_append_chunk)
+
+            if cancelled:
+
+                def _append_cancelled() -> None:
+                    self.chat_text.configure(state="normal")
+                    self.chat_text.insert("end", "\n[Cancelled]")
+                    self.chat_text.see("end")
+                    self.chat_text.configure(state="disabled")
+
+                self._run_on_ui_thread(_append_cancelled)
 
             # Add newlines after response to separate conversation turns
             def _add_separator() -> None:
@@ -360,11 +388,13 @@ class GUIApp(customtkinter.CTk):
 
             self._run_on_ui_thread(_add_separator)
 
-            def mark_complete() -> None:
-                self.plan_status.configure(text="Plan: Complete", text_color="green")
-                self.exec_status.configure(text="Execution: Complete", text_color="green")
+            if not cancelled:
 
-            self._run_on_ui_thread(mark_complete)
+                def mark_complete() -> None:
+                    self.plan_status.configure(text="Plan: Complete", text_color="green")
+                    self.exec_status.configure(text="Execution: Complete", text_color="green")
+
+                self._run_on_ui_thread(mark_complete)
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"
@@ -412,6 +442,17 @@ class GUIApp(customtkinter.CTk):
 
     def _cancel_command(self) -> None:
         """Cancel the current command processing."""
+        self._cancel_requested = True
+        try:
+            self._cancel_event.set()
+        except Exception:
+            pass
+
+        try:
+            self.chat_session.request_cancel()
+        except Exception:
+            pass
+
         self._processing = False
         self._current_command = ""
         self.send_button.configure(state="normal")

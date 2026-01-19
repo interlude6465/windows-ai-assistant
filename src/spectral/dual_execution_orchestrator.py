@@ -6,7 +6,7 @@ complex step breakdown, monitoring, and adaptive fixing.
 """
 
 import logging
-from typing import Generator, Optional
+from typing import Callable, Generator, Optional
 
 from spectral.adaptive_fixing import AdaptiveFixEngine
 from spectral.code_step_breakdown import CodeStepBreakdown
@@ -37,7 +37,7 @@ class DualExecutionOrchestrator:
         llm_client: LLMClient,
         mistake_learner: Optional[MistakeLearner] = None,
         memory_module: Optional[MemoryModule] = None,
-        gui_callback: Optional[callable] = None,
+        gui_callback: Optional[Callable[..., None]] = None,
     ) -> None:
         """
         Initialize dual execution orchestrator.
@@ -77,7 +77,8 @@ class DualExecutionOrchestrator:
         logger.info(f"Processing request: {user_input}")
 
         if max_attempts is None:
-            max_attempts = parse_retry_limit(user_input)
+            parsed = parse_retry_limit(user_input)
+            max_attempts = parsed if parsed is not None else 15
 
         # Route to appropriate execution mode
         mode, confidence = self.router.classify(user_input)

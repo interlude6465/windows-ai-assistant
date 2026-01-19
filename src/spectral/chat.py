@@ -7,8 +7,15 @@ maintaining context across multiple user inputs.
 
 import json
 import logging
+import os
+import queue
+import subprocess
 import sys
+import tempfile
+import threading
+import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 from spectral.config import JarvisConfig
@@ -107,6 +114,8 @@ class ChatSession:
         self.history: List[ChatMessage] = []
         self.is_running = False
         self.execution_history: List[ExecutionMemory] = []
+
+        self._cancel_event = threading.Event()
 
         # Initialize intent classifier and response generator if not provided
         self.intent_classifier = intent_classifier or IntentClassifier()
@@ -603,6 +612,103 @@ class ChatSession:
             self.add_message("assistant", error_msg, metadata={"error": str(e)})
             return error_msg
 
+    def reset_cancel(self) -> None:
+        self._cancel_event.clear()
+
+    def request_cancel(self) -> None:
+        self._cancel_event.set()
+
+    def is_cancel_requested(self) -> bool:
+        return self._cancel_event.is_set()
+
+    def _terminate_process_tree(self, process: subprocess.Popen[str]) -> None:
+        try:
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+            else:
+                try:
+                    os.killpg(os.getpgid(process.pid), 9)
+                except Exception:
+                    process.kill()
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    def _execute_simple_code(self, code: str, timeout_seconds: int = 60) -> str:
+        """Execute generated Python code for a simple task and return raw output."""
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="spectral_simple_task_"))
+        script_path = tmp_dir / "simple_task.py"
+        script_path.write_text(code, encoding="utf-8")
+
+        creationflags = 0
+        start_new_session = False
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            start_new_session = True
+
+        process = subprocess.Popen(
+            [sys.executable, str(script_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            creationflags=creationflags,
+            start_new_session=start_new_session,
+        )
+
+        output_parts: list[str] = []
+        q: queue.Queue[Optional[str]] = queue.Queue()
+
+        def _reader() -> None:
+            try:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    q.put(line)
+            finally:
+                q.put(None)
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+        start = time.monotonic()
+        while True:
+            if self.is_cancel_requested():
+                self._terminate_process_tree(process)
+                return "[Cancelled]"
+
+            if time.monotonic() - start > timeout_seconds:
+                self._terminate_process_tree(process)
+                return f"[Timed out after {timeout_seconds} seconds]"
+
+            try:
+                item = q.get(timeout=0.1)
+            except queue.Empty:
+                if process.poll() is not None:
+                    continue
+                continue
+
+            if item is None:
+                break
+
+            output_parts.append(item)
+
+        try:
+            process.wait(timeout=5)
+        except Exception:
+            pass
+
+        output = "".join(output_parts).strip()
+        return output if output else "(No output)"
+
     def process_command_stream(self, user_input: str) -> Generator[str, None, None]:
         """
         Process a user command and stream formatted response chunks.
@@ -626,26 +732,45 @@ class ChatSession:
         simple_executor = SimpleTaskExecutor()
         if simple_executor.can_handle(user_input):
             logger.info(f"Handling as simple task: {user_input}")
-            result = simple_executor.execute(user_input)
 
-            if result:
-                # Use LLM to generate natural response if available
+            code = simple_executor.get_code_for_task(user_input)
+            if code:
+                raw_output = self._execute_simple_code(code)
+
+                if self.is_cancel_requested():
+                    return
+
+                # Use LLM to present results naturally (but keep output verbatim)
                 memory_context = self._build_context_from_memory(user_input)
 
                 full_response = ""
                 if self.response_generator.llm_client:
-                    for chunk in self.response_generator.generate_response_stream(
-                        intent="command",
-                        execution_result=result,
-                        original_input=user_input,
-                        memory_context=memory_context,
-                    ):
+                    context_block = ""
+                    if memory_context:
+                        context_block = f"[BACKGROUND: {memory_context}]\n\n"
+
+                    prompt = (
+                        f'{context_block}The user asked: "{user_input}"\n\n'
+                        "You executed Python code to complete the request and got this raw output "
+                        "(verbatim):\n\n"
+                        "```\n"
+                        f"{raw_output}\n"
+                        "```\n\n"
+                        "Respond by presenting the output to the user. "
+                        "If it's command output or multi-line data, include it verbatim "
+                        "(do not omit lines). "
+                        "You may add a very short introduction sentence, but do not summarize "
+                        "unless the user asked for a summary."
+                    )
+
+                    for chunk in self.response_generator.llm_client.generate_stream(prompt):
+                        if self.is_cancel_requested():
+                            return
                         full_response += chunk
                         yield chunk
                 else:
-                    # Fallback to simple response
-                    full_response = result
-                    yield result
+                    full_response = raw_output
+                    yield raw_output
 
                 # Add to history
                 context = self.get_context_summary()
@@ -653,7 +778,9 @@ class ChatSession:
                     "user", user_input, metadata={"context": context, "intent": "command"}
                 )
                 self.add_message(
-                    "assistant", full_response, metadata={"intent": "command", "simple_task": True}
+                    "assistant",
+                    full_response,
+                    metadata={"intent": "command", "simple_task": True},
                 )
 
                 # Save to memory
@@ -720,6 +847,8 @@ class ChatSession:
                 original_input=user_input,
                 memory_context=memory_context,
             ):
+                if self.is_cancel_requested():
+                    return
                 full_response += chunk
                 yield chunk
 
@@ -740,6 +869,8 @@ class ChatSession:
             return
 
         max_attempts = parse_retry_limit(user_input)
+        if max_attempts is None:
+            max_attempts = 15
 
         # Check for location queries first
         location_result = self._handle_location_query(user_input)
@@ -796,6 +927,8 @@ class ChatSession:
                         for chunk in self.dual_execution_orchestrator.process_request(
                             user_input, max_attempts=max_attempts
                         ):
+                            if self.is_cancel_requested():
+                                return
                             yield chunk
                             full_response_parts.append(chunk)
 
@@ -816,6 +949,8 @@ class ChatSession:
                 try:
                     controller_result = None
                     for chunk in self.controller.process_command_stream(user_input):
+                        if self.is_cancel_requested():
+                            return
                         yield chunk
                         full_response_parts.append(chunk)
 
