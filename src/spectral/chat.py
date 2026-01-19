@@ -152,12 +152,11 @@ class ChatSession:
             )
 
         # Initialize memory search and reference resolver if memory module is available
+        self.memory_search: Optional[MemorySearch] = None
+        self.reference_resolver: Optional[ReferenceResolver] = None
         if memory_module:
             self.memory_search = MemorySearch()
             self.reference_resolver = ReferenceResolver()
-        else:
-            self.memory_search = None
-            self.reference_resolver = None
 
         # Initialize research handler and execution router
         self.research_handler = ResearchIntentHandler(config=config)
@@ -336,19 +335,23 @@ class ChatSession:
             return
 
         try:
-            # Extract context tags from the conversation
+            # Extract context tags and execution run IDs from the conversation
             context_tags = []
+            execution_run_ids = []
             if execution_history:
                 for exec_mem in execution_history:
                     context_tags.extend(exec_mem.tags)
+                    if hasattr(exec_mem, "execution_id"):
+                        execution_run_ids.append(exec_mem.execution_id)
 
             self.memory_module.save_conversation_turn(
                 user_message=user_message,
                 assistant_response=assistant_response,
                 execution_history=execution_history or [],
                 context_tags=context_tags,
+                execution_run_ids=execution_run_ids,
             )
-            logger.info("Saved conversation turn to memory")
+            logger.info("Saved conversation turn to memory with execution links")
         except Exception as e:
             logger.error(f"Failed to save conversation to memory: {e}")
 

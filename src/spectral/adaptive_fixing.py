@@ -82,6 +82,34 @@ class AdaptiveFixEngine:
             diagnosis = self._parse_diagnosis_response(response, error_type, error_details)
             logger.info(f"Diagnosis complete: {diagnosis.root_cause}")
 
+            # Path error detection (Part 4)
+            is_path_error = (
+                "filenotfounderror" in error_details.lower()
+                or "winerror 3" in error_details.lower()
+                or "winerror 2" in error_details.lower()
+            )
+
+            if is_path_error:
+                import getpass
+
+                username = getpass.getuser()
+                unix_patterns = ["/path/to", "/usr/bin", "/home/", "/var/"]
+                has_unix_path = (
+                    any(p in original_output or p in step.code for p in unix_patterns)
+                    if step.code
+                    else False
+                )
+
+                if has_unix_path:
+                    logger.warning("Detected Unix paths in Windows environment during path error")
+                    diagnosis.root_cause += " (Detected Unix-style paths on Windows)"
+                    diagnosis.suggested_fix = (
+                        "Replace Unix paths with Windows paths. "
+                        f"Use C:\\Users\\{username}\\Desktop instead of /path/to/start."
+                    )
+                    diagnosis.fix_strategy = "regenerate_code"
+                    diagnosis.confidence = 0.95
+
             # Override incorrect diagnoses for Windows socket errors
             if (
                 "winerror" in error_details.lower() or "socket" in error_details.lower()
@@ -354,6 +382,10 @@ class AdaptiveFixEngine:
         original_output: str,
     ) -> str:
         """Build prompt for failure diagnosis."""
+        import getpass
+
+        username = getpass.getuser()
+
         # Check for Windows socket errors
         is_windows_socket_error = (
             "winerror" in error_details.lower()
@@ -409,6 +441,14 @@ Return only valid JSON, no other text."""
             prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
 Analyze this code execution failure and provide a detailed diagnosis.
+
+IMPORTANT: You are running on Windows.
+- Home directory: C:\\Users\\{username}
+- Desktop: C:\\Users\\{username}\\Desktop
+
+If the error is FileNotFoundError or WinError 3, check if the code is trying to
+use Unix paths (e.g., /path/to/..., /home/...) and suggest replacing them with
+correct Windows paths.
 
 Step Description: {step.description}
 

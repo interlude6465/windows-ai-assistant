@@ -5,7 +5,10 @@ Provides search capabilities for past conversations and executions,
 including semantic search using keyword matching (with future support for embeddings).
 """
 
+import json
 import logging
+from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
 from spectral.llm_client import LLMClient
@@ -43,12 +46,22 @@ class MemorySearch:
         Returns:
             List of matching executions, sorted by relevance
         """
-        logger.info(f"Searching {len(executions)} executions for: {query}")
+        # Load any metadata-based executions that aren't already in the list
+        all_executions = list(executions)
+        metadata_executions = self.load_execution_metadata()
+
+        # Merge, avoiding duplicates by ID
+        existing_ids = {e.execution_id for e in all_executions}
+        for me in metadata_executions:
+            if me.execution_id not in existing_ids:
+                all_executions.append(me)
+
+        logger.info(f"Searching {len(all_executions)} executions for: {query}")
         query_lower = query.lower()
 
         # Score each execution based on multiple factors
         scored_executions = []
-        for execution in executions:
+        for execution in all_executions:
             score = self._calculate_relevance_score(query_lower, execution)
             if score > 0:
                 scored_executions.append((score, execution))
@@ -59,6 +72,55 @@ class MemorySearch:
 
         logger.info(f"Found {len(results)} matching executions")
         return results
+
+    def load_execution_metadata(self) -> List[ExecutionMemory]:
+        """
+        Load execution metadata from ~/.spectral/execution_metadata/
+
+        Returns:
+            List of ExecutionMemory objects
+        """
+        metadata_dir = Path.home() / ".spectral" / "execution_metadata"
+        if not metadata_dir.exists():
+            return []
+
+        executions = []
+        for meta_file in metadata_dir.glob("*.json"):
+            try:
+                with open(meta_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # Map metadata fields to ExecutionMemory
+                # Metadata: run_id, timestamp, prompt, filename, desktop_path,
+                # sandbox_path, code, execution_status, execution_output,
+                # execution_error, attempts, last_error
+
+                # ExecutionMemory: execution_id, timestamp, user_request,
+                # description, code_generated, file_locations, output,
+                # success, tags, execution_time_ms, error_message
+
+                exec_mem = ExecutionMemory(
+                    execution_id=data.get("run_id", meta_file.stem),
+                    timestamp=datetime.fromisoformat(
+                        data.get("timestamp", datetime.now().isoformat())
+                    ),
+                    user_request=data.get("prompt", ""),
+                    description=f"Generated {data.get('filename', 'main.py')}",
+                    code_generated=data.get("code", ""),
+                    file_locations=[data.get("desktop_path", ""), data.get("sandbox_path", "")],
+                    output=data.get("execution_output", ""),
+                    success=data.get("execution_status") == "success",
+                    tags=["metadata_load"],
+                    error_message=data.get("execution_error") or data.get("last_error"),
+                )
+                # Clean up empty file locations
+                exec_mem.file_locations = [loc for loc in exec_mem.file_locations if loc]
+
+                executions.append(exec_mem)
+            except Exception as e:
+                logger.warning(f"Failed to load execution metadata from {meta_file}: {e}")
+
+        return executions
 
     def search_conversations(
         self, query: str, conversations: List[ConversationMemory], limit: int = 5

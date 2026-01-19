@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Generator, Optional
 
@@ -85,13 +86,16 @@ class DirectExecutor:
             except Exception as e:
                 logger.debug(f"GUI callback error: {e}")
 
-    def generate_code(self, user_request: str, language: str = "python") -> str:
+    def generate_code(
+        self, user_request: str, language: str = "python", target_filename: Optional[str] = None
+    ) -> str:
         """
         Generate code from user request with learned patterns.
 
         Args:
             user_request: User's natural language request
             language: Programming language (default: python)
+            target_filename: Optional target filename for path construction
 
         Returns:
             Generated code as string
@@ -112,7 +116,12 @@ class DirectExecutor:
         # Query learned patterns
         learned_patterns = self.mistake_learner.get_patterns_for_generation(tags=tags)
 
+        # Build prompt with target filename context if available
         prompt = self._build_code_generation_prompt(user_request, language, learned_patterns)
+
+        if target_filename:
+            prompt += f"\n\nIMPORTANT: The user wants to save this as '{target_filename}'. "
+            prompt += "Make sure to use this filename in any internal references or save logic."
 
         try:
             code = self.llm_client.generate(prompt)
@@ -179,7 +188,11 @@ class DirectExecutor:
             raise
 
     def save_code_to_desktop(
-        self, code: str, user_request: str, script_path: Optional[Path] = None
+        self,
+        code: str,
+        user_request: str,
+        script_path: Optional[Path] = None,
+        filename: Optional[str] = None,
     ) -> Path:
         """
         Save generated code to Desktop with timestamp.
@@ -190,13 +203,16 @@ class DirectExecutor:
             code: Code content to save (actual Python code)
             user_request: Original user request (for generating filename)
             script_path: Optional existing script path to copy from
+            filename: Optional specific filename to use
 
         Returns:
             Path to the saved file on Desktop
         """
-        # Generate filename from user request (with safe timestamp)
+        # Generate filename from user request if not provided
         desktop = Path.home() / "Desktop"
-        filename = self._generate_safe_filename(user_request) + ".py"
+        if not filename:
+            filename = self._generate_safe_filename(user_request) + ".py"
+
         file_path = desktop / filename
 
         try:
@@ -429,6 +445,7 @@ class DirectExecutor:
         last_error_output = ""
         desktop_path: Optional[Path] = None
         run_id: Optional[str] = None
+        target_filename = self._generate_safe_filename(user_request) + ".py"
 
         while True:
             decision = retry_manager.should_retry()
@@ -445,7 +462,9 @@ class DirectExecutor:
             try:
                 if attempt == 1:
                     yield f"📝 Generating code... ({progress})\n"
-                    code = self.generate_code(user_request, language)
+                    code = self.generate_code(
+                        user_request, language, target_filename=target_filename
+                    )
                 else:
                     yield f"📝 Fixing code... ({progress})\n"
                     code = self._generate_fix_code(
@@ -503,7 +522,7 @@ class DirectExecutor:
                 result = self.sandbox_manager.execute_verification_pipeline(
                     run_id=run_id,
                     code=code,
-                    filename="main.py",
+                    filename=target_filename,
                     is_gui=is_gui,
                     stdin_data=stdin_data,
                 )
@@ -522,7 +541,7 @@ class DirectExecutor:
                     yield "💾 Exporting verified code to Desktop...\n"
                     try:
                         desktop_path = self.save_code_to_desktop(
-                            code, user_request, result.code_path
+                            code, user_request, result.code_path, filename=target_filename
                         )
                         yield f"   ✓ Saved to: {desktop_path}\n"
                     except Exception as e:
@@ -530,6 +549,23 @@ class DirectExecutor:
 
                     # Save run metadata
                     self.sandbox_manager.save_run_metadata(run_id, result)
+
+                    # Save comprehensive execution metadata
+                    execution_metadata = {
+                        "run_id": run_id,
+                        "timestamp": datetime.now().isoformat(),
+                        "prompt": user_request,
+                        "filename": target_filename,
+                        "desktop_path": str(desktop_path) if desktop_path else None,
+                        "sandbox_path": str(result.code_path),
+                        "code": code,
+                        "execution_status": "success",
+                        "execution_output": result.log_stdout,
+                        "execution_error": result.log_stderr,
+                        "attempts": attempt,
+                        "last_error": None,
+                    }
+                    self.sandbox_manager.save_execution_metadata(execution_metadata)
 
                     # Save to memory
                     if self.memory_module:
@@ -563,6 +599,23 @@ class DirectExecutor:
                 else:
                     yield "🔧 Code verification failed, regenerating...\n"
                     last_error_output = result.error_message or ""
+
+                # Save metadata for failed execution
+                execution_metadata = {
+                    "run_id": run_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "prompt": user_request,
+                    "filename": target_filename,
+                    "desktop_path": None,
+                    "sandbox_path": str(result.code_path),
+                    "code": code,
+                    "execution_status": "failed",
+                    "execution_output": result.log_stdout,
+                    "execution_error": result.log_stderr,
+                    "attempts": attempt,
+                    "last_error": last_error_output or result.status,
+                }
+                self.sandbox_manager.save_execution_metadata(execution_metadata)
 
                 retry_manager.record_error(last_error_output or result.status)
 
@@ -843,6 +896,10 @@ Return ONLY the complete fixed code, no markdown formatting."""
         Returns:
             Formatted prompt string
         """
+        import getpass
+
+        username = getpass.getuser()
+
         prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
 Task: Write a {language} script that does the following:
@@ -853,6 +910,21 @@ Remember:
 - No input() calls
 - Code must run autonomously
 - Produce output immediately
+
+IMPORTANT: You are running on Windows. Always use Windows paths:
+- Home directory: C:\\Users\\{username}
+- Desktop: C:\\Users\\{username}\\Desktop
+- Temp: C:\\Users\\{username}\\AppData\\Local\\Temp
+
+NEVER use:
+- /path/to/... (Unix paths)
+- /usr/bin, /home, /var (Unix directories)
+- Relative paths like './data' (use full Windows paths)
+
+For file operations, use:
+- os.path.expanduser('~') for home directory
+- os.path.join() for path construction
+- Always use backslashes or raw strings: r'C:\\path\\to\\file'
 
 General Requirements:
 - Write complete, executable code

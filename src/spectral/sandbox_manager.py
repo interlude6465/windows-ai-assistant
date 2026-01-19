@@ -11,9 +11,10 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from spectral.process_controller import ProcessController, ProcessResult
 
@@ -617,6 +618,34 @@ class SandboxRunManager:
             logger.debug(f"Saved run metadata: {metadata_file}")
         except Exception as e:
             logger.warning(f"Failed to save run metadata: {e}")
+
+    def save_execution_metadata(self, metadata: Dict[str, Any]) -> None:
+        """
+        Save comprehensive execution metadata to ~/.spectral/execution_metadata/
+
+        Args:
+            metadata: Metadata dictionary to save
+        """
+        run_id = metadata.get("run_id")
+        if not run_id:
+            logger.warning("No run_id provided in metadata, cannot save")
+            return
+
+        metadata_dir = Path.home() / ".spectral" / "execution_metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+
+        metadata_file = metadata_dir / f"{run_id}.json"
+
+        # Ensure timestamp is present
+        if "timestamp" not in metadata:
+            metadata["timestamp"] = datetime.now().isoformat()
+
+        try:
+            with open(metadata_file, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2)
+            logger.info(f"Saved execution metadata to {metadata_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save execution metadata: {e}")
 
     def _generate_basic_test(self, code: str, filename: str) -> str:
         """

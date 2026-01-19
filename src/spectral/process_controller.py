@@ -79,8 +79,6 @@ class ProcessController:
         logger.info(f"Log file: {log_file}")
 
         # Initialize variables to ensure they're available in except handlers
-        stdout_lines: List[str] = []
-        stderr_lines: List[str] = []
         exit_code: Optional[int] = -1
         timed_out = False
         process = None
@@ -99,93 +97,53 @@ class ProcessController:
                 cmd,
                 cwd=cwd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1,
+                errors="replace",
                 creationflags=creation_flags,
             )
 
-            # Stream output in real-time while process runs
-            with open(log_file, "w", encoding="utf-8") as log_f:
+            try:
+                # Use communicate for proper pipe handling and timeout
+                stdout, stderr = process.communicate(timeout=timeout)
+                exit_code = process.returncode
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Process timeout after {timeout}s, killing process")
+                timed_out = True
+                self._kill_process_tree(process.pid)
+                # Read remaining output after killing
+                stdout, stderr = process.communicate()
+                exit_code = process.returncode or -1
+
+            logger.debug("Subprocess pipes closed and process waited for")
+
+            # Ensure we have strings
+            stdout = stdout or ""
+            stderr = stderr or ""
+
+            # Log raw output before returning
+            logger.debug(f"Raw stdout: {stdout}")
+            logger.debug(f"Raw stderr: {stderr}")
+
+            # Write to log file
+            with open(log_file, "w", encoding="utf-8", errors="replace") as log_f:
                 log_f.write(f"Command: {' '.join(cmd)}\n")
                 log_f.write(f"Working directory: {cwd}\n")
                 log_f.write(f"Started at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 log_f.write("=" * 50 + "\n\n")
-
-                # Stream output with periodic timeout checks
-                import select
-
-                while True:
-                    # Check if process has terminated
-                    exit_code = process.poll()
-                    if exit_code is not None:
-                        # Process finished, read any remaining output
-                        if process.stdout:
-                            remaining_output = process.stdout.read()
-                            if remaining_output:
-                                lines = remaining_output.splitlines(keepends=True)
-                                for line in lines:
-                                    stdout_lines.append(line)
-                                    log_f.write(line)
-                        break
-
-                    # Read available output with short timeout (0.1s)
-                    try:
-                        if process.stdout:
-                            readable, _, _ = select.select([process.stdout], [], [], 0.1)
-                            if readable:
-                                line = process.stdout.readline()
-                                if line:
-                                    stdout_lines.append(line)
-                                    log_f.write(line)
-                                    log_f.flush()
-                            else:
-                                # Check elapsed time for timeout
-                                elapsed = time.time() - start_time
-                                if elapsed >= timeout:
-                                    logger.warning(
-                                        "Process timeout after %ss, killing process", timeout
-                                    )
-                                    timed_out = True
-                                    self._kill_process_tree(process.pid)
-                                    # Wait for process to terminate
-                                    process.wait(timeout=1)
-                                    exit_code = process.poll()
-                                    if exit_code is None or exit_code < 0:
-                                        # Process was killed by signal, normalize to -1
-                                        exit_code = -1
-                                    break
-                        else:
-                            break
-                    except Exception as e:
-                        logger.warning(f"Error reading process output: {e}")
-                        break
+                log_f.write("STDOUT:\n")
+                log_f.write(stdout)
+                log_f.write("\n\nSTDERR:\n")
+                log_f.write(stderr)
 
             duration = time.time() - start_time
             logger.info(f"Process completed in {duration:.2f}s with exit code {exit_code}")
 
             return ProcessResult(
                 exit_code=exit_code if exit_code is not None else -1,
-                stdout="".join(stdout_lines),
-                stderr="".join(stderr_lines),
+                stdout=stdout,
+                stderr=stderr,
                 timed_out=timed_out,
-                duration_seconds=duration,
-                signal=None,
-            )
-
-        except subprocess.TimeoutExpired:
-            duration = time.time() - start_time
-            logger.warning(f"Process timed out after {timeout}s")
-
-            # Kill process tree if process was created
-            if process is not None:
-                self._kill_process_tree(process.pid)
-
-            return ProcessResult(
-                exit_code=-1,
-                stdout="".join(stdout_lines),
-                stderr="TimeoutExpired",
-                timed_out=True,
                 duration_seconds=duration,
                 signal=None,
             )
@@ -200,7 +158,7 @@ class ProcessController:
 
             return ProcessResult(
                 exit_code=-1,
-                stdout="".join(stdout_lines),
+                stdout="",
                 stderr=str(e),
                 timed_out=False,
                 duration_seconds=duration,

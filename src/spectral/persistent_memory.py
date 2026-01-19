@@ -436,9 +436,10 @@ class MemoryModule:
         self,
         user_message: str,
         assistant_response: str,
-        execution_history: List[ExecutionMemory] = None,
-        context_tags: List[str] = None,
+        execution_history: Optional[List[ExecutionMemory]] = None,
+        context_tags: Optional[List[str]] = None,
         session_id: Optional[str] = None,
+        execution_run_ids: Optional[List[str]] = None,
     ) -> str:
         """
         Save a conversation turn with execution history.
@@ -449,6 +450,7 @@ class MemoryModule:
             execution_history: List of executions performed during this turn
             context_tags: Tags for context categorization
             session_id: Optional session identifier
+            execution_run_ids: List of run IDs for executions
 
         Returns:
             Turn ID of the saved conversation
@@ -464,6 +466,13 @@ class MemoryModule:
             session_id=session_id,
         )
 
+        # Link execution run IDs if provided
+        if execution_run_ids:
+            if not conversation.context_tags:
+                conversation.context_tags = []
+            for run_id in execution_run_ids:
+                conversation.context_tags.append(f"execution_run:{run_id}")
+
         self.conversation_backend.save_conversation(conversation)
         logger.info(f"Saved conversation turn: {turn_id}")
         return turn_id
@@ -473,10 +482,10 @@ class MemoryModule:
         user_request: str,
         description: str,
         code_generated: str,
-        file_locations: List[str] = None,
+        file_locations: Optional[List[str]] = None,
         output: str = "",
         success: bool = True,
-        tags: List[str] = None,
+        tags: Optional[List[str]] = None,
         execution_time_ms: Optional[int] = None,
         error_message: Optional[str] = None,
         conversation_id: Optional[str] = None,

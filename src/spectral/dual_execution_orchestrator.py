@@ -17,6 +17,7 @@ from spectral.execution_router import ExecutionRouter
 from spectral.llm_client import LLMClient
 from spectral.mistake_learner import MistakeLearner
 from spectral.persistent_memory import MemoryModule
+from spectral.research_intent_handler import ResearchIntentHandler
 from spectral.retry_parsing import format_attempt_progress, parse_retry_limit
 from spectral.utils import AUTONOMOUS_CODE_REQUIREMENT, SmartInputHandler, clean_code
 
@@ -60,6 +61,7 @@ class DualExecutionOrchestrator:
         self.execution_monitor = ExecutionMonitor()
         self.execution_monitor.set_gui_callback(gui_callback)
         self.adaptive_fix_engine = AdaptiveFixEngine(llm_client, self.mistake_learner)
+        self.research_handler = ResearchIntentHandler()
         logger.info("DualExecutionOrchestrator initialized")
 
     def process_request(
@@ -83,7 +85,13 @@ class DualExecutionOrchestrator:
         # Route to appropriate execution mode
         mode, confidence = self.router.classify(user_input)
 
-        if mode == ExecutionMode.DIRECT and confidence >= 0.6:
+        if mode == ExecutionMode.RESEARCH:
+            logger.info("Using RESEARCH mode")
+            yield from self._execute_research_mode(user_input)
+        elif mode == ExecutionMode.RESEARCH_AND_ACT:
+            logger.info("Using RESEARCH_AND_ACT mode")
+            yield from self._execute_research_and_act_mode(user_input, max_attempts=max_attempts)
+        elif mode == ExecutionMode.DIRECT and confidence >= 0.6:
             logger.info("Using DIRECT execution mode")
             yield from self._execute_direct_mode(user_input, max_attempts=max_attempts)
         else:
@@ -105,6 +113,51 @@ class DualExecutionOrchestrator:
         except Exception as e:
             logger.error(f"DIRECT mode execution failed: {e}")
             yield f"\n❌ Error: {str(e)}\n"
+
+    def _execute_research_mode(self, user_input: str) -> Generator[str, None, None]:
+        """Execute in RESEARCH mode (information gathering)."""
+        logger.info(f"Executing in RESEARCH mode: {user_input}")
+        yield f"🔍 Researching: {user_input}...\n"
+
+        try:
+            research_response, _ = self.research_handler.handle_research_query(user_input)
+            yield f"\n{research_response}\n"
+        except Exception as e:
+            logger.error(f"RESEARCH mode failed: {e}")
+            yield f"\n❌ Research failed: {str(e)}\n"
+
+    def _execute_research_and_act_mode(
+        self, user_input: str, max_attempts: Optional[int] = None
+    ) -> Generator[str, None, None]:
+        """Execute in RESEARCH_AND_ACT mode (research then execute)."""
+        logger.info(f"Executing in RESEARCH_AND_ACT mode: {user_input}")
+        yield f"🔍 Step 1: Researching {user_input}...\n"
+
+        try:
+            research_response, pack = self.research_handler.handle_research_query(user_input)
+            yield "   ✓ Research complete\n\n"
+
+            yield "🚀 Step 2: Executing based on research findings...\n"
+
+            # Inject research into prompt
+            augmented_input = f"""
+User Request: {user_input}
+
+Research Findings:
+{research_response}
+
+Please complete the user request using the research findings provided above.
+"""
+            # Route based on complexity
+            mode, confidence = self.router.classify(user_input)
+            if mode == ExecutionMode.PLANNING or len(user_input.split()) > 10:
+                yield from self._execute_planning_mode(augmented_input, max_attempts=max_attempts)
+            else:
+                yield from self._execute_direct_mode(augmented_input, max_attempts=max_attempts)
+
+        except Exception as e:
+            logger.error(f"RESEARCH_AND_ACT mode failed: {e}")
+            yield f"\n❌ Research and Act failed: {str(e)}\n"
 
     def _execute_planning_mode(
         self, user_input: str, max_attempts: Optional[int]
@@ -264,6 +317,10 @@ class DualExecutionOrchestrator:
         Returns:
             Generated code
         """
+        import getpass
+
+        username = getpass.getuser()
+
         prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
 Task: Write Python code to accomplish this step:
@@ -276,6 +333,21 @@ Remember:
 - No input() calls
 - Code must run autonomously
 - Produce output immediately
+
+IMPORTANT: You are running on Windows. Always use Windows paths:
+- Home directory: C:\\Users\\{username}
+- Desktop: C:\\Users\\{username}\\Desktop
+- Temp: C:\\Users\\{username}\\AppData\\Local\\Temp
+
+NEVER use:
+- /path/to/... (Unix paths)
+- /usr/bin, /home, /var (Unix directories)
+- Relative paths like './data' (use full Windows paths)
+
+For file operations, use:
+- os.path.expanduser('~') for home directory
+- os.path.join() for path construction
+- Always use backslashes or raw strings: r'C:\\path\\to\\file'
 
 General Requirements:
 - Write complete, executable code

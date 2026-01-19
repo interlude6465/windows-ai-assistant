@@ -186,15 +186,42 @@ class ExecutionRouter:
                 logger.debug("Short input without strong technical keywords, skipping research")
                 return ExecutionMode.DIRECT, 0.4
 
+        # EARLY EXIT: Exclude creation commands from research
+        creation_keywords = ["write", "create", "build", "generate", "implement", "make", "develop"]
+        if any(input_lower.startswith(kw) for kw in creation_keywords):
+            logger.debug(
+                "Creation command detected, routing to DIRECT/PLANNING instead of RESEARCH"
+            )
+            # Determine between DIRECT and PLANNING
+            direct_keyword_count = sum(1 for word in words if word in self.direct_keywords)
+            planning_keyword_count = sum(1 for word in words if word in self.planning_keywords)
+            if planning_keyword_count > direct_keyword_count or len(words) > 10:
+                return ExecutionMode.PLANNING, 0.8
+            return ExecutionMode.DIRECT, 0.8
+
+        # EARLY EXIT: Exclude meta-prompts from research
+        meta_prompts = ["on purpose", "intentionally", "as an example", "for demonstration"]
+        if any(pattern in input_lower for pattern in meta_prompts):
+            logger.debug("Meta-prompt detected, avoiding research")
+            return ExecutionMode.DIRECT, 0.7
+
         # Count indicators for each mode
         direct_score = 0.0
         planning_score = 0.0
         research_score = 0.0
 
         # Check for research patterns (strong signals)
-        for pattern in self.research_keywords:
+        explicit_research_queries = [
+            "how to",
+            "what is",
+            "find out",
+            "explain",
+            "look up",
+            "how do i",
+        ]
+        for pattern in explicit_research_queries:
             if pattern in input_lower:
-                research_score += 0.8
+                research_score += 1.0
 
         # Questions are usually research
         if input_lower.startswith(("how", "what", "why", "when", "where", "can", "does", "is")):
