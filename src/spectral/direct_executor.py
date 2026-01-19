@@ -6,7 +6,6 @@ Integrates with SandboxRunManager for robust verification pipeline.
 """
 
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -16,12 +15,13 @@ from pathlib import Path
 from typing import Callable, Generator, Optional
 
 from spectral.gui_test_generator import GUITestGenerator
+from spectral.intelligent_retry import IntelligentRetryManager
 from spectral.llm_client import LLMClient
 from spectral.memory_models import ExecutionMemory
 from spectral.mistake_learner import MistakeLearner
 from spectral.persistent_memory import MemoryModule
 from spectral.retry_parsing import format_attempt_progress, parse_retry_limit
-from spectral.sandbox_manager import SandboxRunManager, SandboxResult
+from spectral.sandbox_manager import SandboxResult, SandboxRunManager
 from spectral.utils import clean_code, detect_input_calls, generate_test_inputs, has_input_calls
 
 logger = logging.getLogger(__name__)
@@ -303,6 +303,9 @@ class DirectExecutor:
                 creationflags=creation_flags,
             )
 
+            assert process.stdin is not None
+            assert process.stdout is not None
+
             # Send all inputs joined with newlines
             input_data = "\n".join(test_inputs) + "\n"
             process.stdin.write(input_data)
@@ -397,28 +400,36 @@ class DirectExecutor:
     ) -> Generator[str, None, None]:
         """Execute a user request end-to-end with sandbox verification.
 
-        Retries indefinitely by default (per-attempt timeout still applies). If
-        user specifies a max attempt limit, that limit is respected.
-        
+        Retry behavior is bounded and loop-aware:
+        - If the user doesn't specify a limit, attempts are capped at 15.
+        - If the same error repeats several times, retries stop early to avoid loops.
+
         Uses SandboxRunManager for isolated verification before desktop export.
         """
 
         logger.info(f"Executing request: {user_request}")
 
         if max_attempts is None:
-            max_attempts = parse_retry_limit(user_request)
+            parsed = parse_retry_limit(user_request)
+            max_attempts = parsed if parsed is not None else 15
 
-        attempt = 1
+        retry_manager = IntelligentRetryManager(max_retries=max_attempts, error_repeat_threshold=3)
+
         code: Optional[str] = None
         last_error_output = ""
         desktop_path: Optional[Path] = None
         run_id: Optional[str] = None
 
         while True:
-            if max_attempts is not None and attempt > max_attempts:
-                yield f"\n❌ Max retries ({max_attempts}) exceeded, aborting\n"
+            decision = retry_manager.should_retry()
+            if not decision.should_retry:
+                reason = decision.reason or "retry budget exhausted"
+                yield f"\n❌ Stopping retries: {reason}\n"
+                if last_error_output:
+                    yield f"Last error:\n{last_error_output}\n"
                 return
 
+            attempt = retry_manager.next_attempt()
             progress = format_attempt_progress(attempt, max_attempts)
 
             try:
@@ -447,7 +458,7 @@ class DirectExecutor:
                 # Create sandbox run for verification
                 if run_id is None:
                     run_id = self.sandbox_manager.create_run()
-                
+
                 yield f"🔒 Creating isolated sandbox: {run_id}\n"
 
                 # Prepare stdin data for interactive programs
@@ -465,11 +476,10 @@ class DirectExecutor:
 
                 # Detect GUI program
                 is_gui, framework = self.gui_test_generator.detect_gui_program(code)
-                
+
                 # For GUI programs, we may need to regenerate with test_mode contract
                 if is_gui and framework:
                     yield f"🎨 Detected GUI program ({framework})\n"
-                    # TODO: Check if code follows test_mode contract, if not regenerate
                     yield "   Enforcing test_mode contract for verification\n"
 
                 # Execute sandbox verification
@@ -490,18 +500,20 @@ class DirectExecutor:
 
                 if result.status == "success":
                     yield "✅ All verification gates passed!\n\n"
-                    
+
                     # Export to desktop
                     yield "💾 Exporting verified code to Desktop...\n"
                     try:
-                        desktop_path = self.save_code_to_desktop(code, user_request, result.code_path)
+                        desktop_path = self.save_code_to_desktop(
+                            code, user_request, result.code_path
+                        )
                         yield f"   ✓ Saved to: {desktop_path}\n"
                     except Exception as e:
                         yield f"   ⚠️  Could not save to Desktop: {e}\n"
 
                     # Save run metadata
                     self.sandbox_manager.save_run_metadata(run_id, result)
-                    
+
                     # Save to memory
                     if self.memory_module:
                         self._save_execution_to_memory(
@@ -510,46 +522,57 @@ class DirectExecutor:
 
                     # Clean up sandbox
                     self.sandbox_manager.cleanup_run(run_id)
-                    
+
                     yield "\n🎉 Code successfully verified and exported!\n"
                     return
 
+                # Verification failed, handle different failure types
+                yield f"❌ Verification failed: {result.status}\n"
+
+                if result.error_message:
+                    yield f"Error: {result.error_message}\n\n"
+
+                if result.status == "syntax_error":
+                    yield "🔧 Fixing syntax error and retrying...\n"
+                    last_error_output = result.error_message or ""
+                elif result.status == "test_failure":
+                    yield "🔧 Tests failed, regenerating with fixes...\n"
+                    last_error_output = result.pytest_summary or result.error_message or ""
+                elif result.status == "timeout":
+                    yield "🔧 Execution timeout, optimizing code...\n"
+                    last_error_output = (
+                        "Execution timeout - code may have infinite loops or blocking calls"
+                    )
                 else:
-                    # Verification failed, handle different failure types
-                    yield f"❌ Verification failed: {result.status}\n"
-                    
-                    if result.error_message:
-                        yield f"Error: {result.error_message}\n\n"
+                    yield "🔧 Code verification failed, regenerating...\n"
+                    last_error_output = result.error_message or ""
 
-                    if result.status == "syntax_error":
-                        yield "🔧 Fixing syntax error and retrying...\n"
-                        last_error_output = result.error_message or ""
-                    elif result.status == "test_failure":
-                        yield "🔧 Tests failed, regenerating with fixes...\n"
-                        last_error_output = result.pytest_summary or result.error_message or ""
-                    elif result.status == "timeout":
-                        yield "🔧 Execution timeout, optimizing code...\n"
-                        last_error_output = "Execution timeout - code may have infinite loops or blocking calls"
-                    else:
-                        yield "🔧 Code verification failed, regenerating...\n"
-                        last_error_output = result.error_message or ""
+                retry_manager.record_error(last_error_output or result.status)
 
-                    # Clean up failed run
-                    self.sandbox_manager.cleanup_run(run_id)
-                    run_id = None  # Create new run for retry
-                    
-                    attempt += 1
-                    yield f"🔄 Retrying... ({format_attempt_progress(attempt, max_attempts)})\n\n"
-                    continue
+                # Clean up failed run
+                self.sandbox_manager.cleanup_run(run_id)
+                run_id = None  # Create new run for retry
+
+                # If the repeated error detector thinks we're stuck, stop now.
+                post_fail_decision = retry_manager.should_retry()
+                if not post_fail_decision.should_retry:
+                    reason = post_fail_decision.reason or "retry budget exhausted"
+                    yield f"\n❌ Stopping retries: {reason}\n"
+                    if last_error_output:
+                        yield f"Last error:\n{last_error_output}\n"
+                    return
+
+                yield "🔄 Retrying...\n\n"
+                continue
 
             except Exception as e:
                 logger.error(f"Execution failed: {e}")
                 yield f"\n❌ Execution error: {str(e)}\n"
-                
+
                 # Clean up on error
                 if run_id:
                     self.sandbox_manager.cleanup_run(run_id)
-                
+
                 return
 
     def _save_execution_to_memory(
@@ -572,23 +595,23 @@ class DirectExecutor:
         """
         if not self.memory_module:
             return
-            
+
         try:
             file_locations = [str(result.code_path)]
             if desktop_path:
                 file_locations.append(str(desktop_path))
-            
+
             # Add test files if they exist
             for test_path in result.test_paths:
                 file_locations.append(str(test_path))
-                
+
             description = self._generate_description(user_request, code)
             tags = ["python", "sandbox_verification"]
             if is_gui:
                 tags.append("gui")
             else:
                 tags.append("cli")
-                
+
             execution_id = self.memory_module.save_execution(
                 user_request=user_request,
                 description=description,
@@ -598,148 +621,11 @@ class DirectExecutor:
                 success=True,
                 tags=tags,
             )
-            
+
             logger.info(f"Saved sandbox execution to memory: {execution_id}")
-            
+
         except Exception as e:
             logger.error(f"Failed to save execution to memory: {e}")
-
-    def _generate_description(self, user_request: str, code: str) -> str:
-        """
-        Generate a description for the execution memory.
-
-        Args:
-            user_request: Original user request
-            code: Generated code
-
-        Returns:
-            Description string
-        """
-        # Simple description based on request
-        if len(user_request) > 50:
-            return f"Generated Python code for: {user_request[:47]}..."
-        return f"Generated Python code for: {user_request}"
-
-    def _generate_fix_code(
-        self,
-        user_request: str,
-        previous_code: str,
-        error_output: str,
-        language: str,
-        attempt: int,
-    ) -> str:
-        """
-        Generate fixed code based on error output.
-
-        Args:
-            user_request: Original user request
-            previous_code: Previously generated code that failed
-            error_output: Error output from failed execution
-            language: Programming language
-            attempt: Current attempt number
-
-        Returns:
-            Fixed code
-        """
-        logger.info(f"Generating fix code (attempt {attempt})")
-
-        # Build prompt for fix generation
-        prompt = self._build_fix_prompt(user_request, previous_code, error_output, language, attempt)
-
-        try:
-            fixed_code = self.llm_client.generate(prompt)
-            cleaned_code = clean_code(str(fixed_code))
-            logger.debug(f"Generated fix code: {len(cleaned_code)} characters")
-            return str(cleaned_code)
-        except Exception as e:
-            logger.error(f"Failed to generate fix code: {e}")
-            raise
-
-    def _build_fix_prompt(
-        self,
-        user_request: str,
-        previous_code: str,
-        error_output: str,
-        language: str,
-        attempt: int,
-    ) -> str:
-        """
-        Build prompt for code fixing.
-
-        Args:
-            user_request: Original user request
-            previous_code: Previously generated code
-            error_output: Error output from execution
-            language: Programming language
-            attempt: Current attempt number
-
-        Returns:
-            Fix prompt string
-        """
-        return f"""Fix the following {language} code based on the error output.
-
-ORIGINAL REQUEST:
-{user_request}
-
-PREVIOUS CODE:
-```python
-{previous_code}
-```
-
-ERROR OUTPUT:
-{error_output}
-
-INSTRUCTIONS:
-1. Fix the specific error(s) mentioned in the error output
-2. Keep the same functionality and approach
-3. Ensure the code is complete and runnable
-4. Add proper error handling if needed
-5. Make minimal changes to fix the issue
-6. Return only the fixed code, no explanations
-
-FIXED CODE:"""
-        return prompt
-
-    def _generate_description(self, user_request: str, code: str) -> str:
-        """
-        Generate a semantic description for an execution.
-
-        Args:
-            user_request: Original user request
-            code: Generated code
-
-        Returns:
-            Semantic description
-        """
-        # Extract key concepts from user request
-        request_lower = user_request.lower()
-
-        if "file" in request_lower or "count" in request_lower:
-            return f"File {user_request}"
-
-        if "web" in request_lower or "scrape" in request_lower or "download" in request_lower:
-            return "Web scraper"
-
-        if "api" in request_lower:
-            return "API client"
-
-        if "data" in request_lower or "process" in request_lower:
-            return "Data processing script"
-
-        if "gui" in request_lower or "window" in request_lower or "interface" in request_lower:
-            return "GUI application"
-
-        if "sort" in request_lower or "filter" in request_lower:
-            return "Data manipulation script"
-
-        if "convert" in request_lower or "transform" in request_lower:
-            return "Data conversion script"
-
-        if "backup" in request_lower or "copy" in request_lower:
-            return "File backup script"
-
-        # Default description
-        return f"Python script: {user_request[:50]}"
 
     def _run_script_with_input_support(self, script_path: Path, timeout: int) -> tuple[int, str]:
         """
@@ -786,6 +672,25 @@ FIXED CODE:"""
             return 124, f"Execution timed out after {timeout} seconds"
         except Exception as e:
             return 1, str(e)
+
+    def _run_script_capture(self, script_path: Path, timeout: int) -> tuple[int, str]:
+        """Run a script and capture its combined output."""
+
+        creation_flags = 0
+        if sys.platform == "win32":
+            creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        result = subprocess.run(
+            [sys.executable, str(script_path)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            creationflags=creation_flags,
+        )
+
+        combined_output = (result.stdout or "") + (result.stderr or "")
+        return result.returncode, combined_output
 
     def _detect_desktop_save_request(self, user_request: str) -> bool:
         """Detect if user wants to save to desktop."""
