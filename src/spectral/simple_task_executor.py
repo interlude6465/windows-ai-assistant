@@ -228,49 +228,43 @@ except Exception as e:
 """
 
     def _generate_run_command_code(self, user_input: str) -> str:
-        escaped_input = user_input.replace("\\", "\\\\").replace('"', '\\"')
+        """Generate code to run a command."""
+        import re as regex
 
-        return rf"""import re
-import subprocess
+        # Try to extract command after "run" or "execute" keyword
+        # Patterns: "run whoami", "run dir", "execute ipconfig", etc.
+        patterns = [
+            r'run\s+(\w+)',           # "run whoami", "run dir"
+            r'execute\s+(\w+)',       # "execute ipconfig"
+            r'(?:run|execute)\s+(\w+)',  # Either run or execute
+        ]
+
+        command = None
+        for pattern in patterns:
+            match = regex.search(pattern, user_input, regex.IGNORECASE)
+            if match:
+                command = match.group(1).strip()
+                break
+
+        if command:
+            escaped_command = command.replace("\\", "\\\\").replace('"', '\\"')
+            return rf'''import subprocess
 import sys
 
-user_input = "{escaped_input}"
+try:
+    result = subprocess.run(["{escaped_command}"], capture_output=True, text=True, timeout=30)
+    print(result.stdout)
 
-m = re.search(r"\\b(?:run|execute|command)\\b\\s+(.+)$", user_input, re.IGNORECASE)
-if not m:
-    print("Please specify the command you'd like me to run.")
-    raise SystemExit(0)
+    if result.returncode != 0:
+        print(f"Error: {{result.stderr}}", file=sys.stderr)
+        sys.exit(result.returncode)
+except Exception as e:
+    print(f"Error running command: {{str(e)}}", file=sys.stderr)
+    sys.exit(1)
+'''
 
-command = m.group(1).strip().strip('"').strip("'")
-
-# Basic safety: block clearly dangerous destructive commands.
-dangerous = ["rm", "del", "erase", "format", "shutdown", "reboot", "poweroff", "mkfs", "diskpart"]
-
-for d in dangerous:
-    if re.search(rf"\\b{{re.escape(d)}}\\b", command, re.IGNORECASE):
-        print(f"Blocked potentially dangerous command: {{command}}")
-        raise SystemExit(0)
-
-result = subprocess.run(
-    command,
-    shell=True,
-    capture_output=True,
-    text=True,
-    timeout=60,
-    check=False,
-)
-
-if result.stdout:
-    print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
-if result.stderr:
-    print(
-        result.stderr,
-        end="" if result.stderr.endswith("\n") else "\n",
-        file=sys.stderr,
-    )
-if result.returncode != 0:
-    print(f"[exit code {{result.returncode}}]")
-"""
+        return '''print("Please specify a command to run.")
+print("Example: whoami, dir, tasklist, systeminfo")'''
 
     def _detect_file_path(self, user_input: str) -> bool:
         """Detect if user input contains a file path (by file extension)."""

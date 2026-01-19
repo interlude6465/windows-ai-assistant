@@ -824,15 +824,58 @@ Return ONLY the complete fixed code, no markdown formatting."""
 
 {user_request}
 
-Requirements:
+CRITICAL REQUIREMENTS:
+1. **NO interactive input() calls** - The code must run completely autonomously
+2. **Hard-code all input values** - Don't ask user for input, use example/default values
+3. **For programs that need parameters:**
+   - Instead of: user_input = input("Enter name: ")
+   - Use: name = "John"  # or generate example value
+4. **For file paths:**
+   - Instead of: file = input("Enter file path: ")
+   - Use: file = "data.csv"  # or use a reasonable default path
+5. **For interactive choices:**
+   - Instead of: choice = input("Choose: rock/paper/scissors: ")
+   - Use: choice = "rock"  # hard-code an example
+6. **The code must execute completely without waiting for user input**
+
+EXAMPLES:
+
+❌ BAD (Interactive, won't work):
+```python
+def calculator():
+    num1 = input("Enter first number: ")
+    num2 = input("Enter second number: ")
+    print(num1 + num2)
+```
+✅ GOOD (Autonomous, hard-coded inputs):
+```python
+def calculator():
+    num1 = 42
+    num2 = 8
+    result = num1 + num2
+    print(f"{{num1}} + {{num2}} = {{result}}")
+calculator()
+```
+
+❌ BAD (Asks for file):
+```python
+file = input("Enter CSV file path: ")
+df = pd.read_csv(file)
+```
+✅ GOOD (Uses default or expected path):
+```python
+file = "data.csv"  # or a reasonable default path
+df = pd.read_csv(file)
+print(df)
+```
+
+General Requirements:
 - Write complete, executable code
 - Include proper error handling
 - Add comments explaining the code
 - Make it production-ready
 - No extra text or explanations, just code
-- IMPORTANT: For interactive programs, use input() and print(), NOT Tkinter dialogs
-- AVOID: simpledialog.askstring, simpledialog.askfloat, simpledialog.askinteger
-- Use CLI-based input() instead: input("Enter value: ")
+- IMPORTANT: For interactive programs, use hard-coded values NOT input()
 - IMPORTANT (GUI programs): if you use tkinter/pygame/PyQt/kivy, structure:
   - Do NOT create or show any GUI windows at import time
   - Put main loop / window launch code under if __name__ == "__main__":

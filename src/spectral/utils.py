@@ -168,11 +168,16 @@ def generate_test_inputs(prompts: List[str]) -> List[str]:
         prompt_lower = prompt.lower()
 
         # Pattern matching for common input types
+        # IMPORTANT: Check more specific patterns before general ones
         if any(name in prompt_lower for name in ["name", "user", "username", "who"]):
             test_inputs.append("TestUser")
         elif any(word in prompt_lower for word in ["age", "years", "old"]):
             test_inputs.append("25")
-        elif any(word in prompt_lower for word in ["number", "num", "count", "quantity"]):
+        elif any(word in prompt_lower for word in ["first", "num1", "value1"]):
+            test_inputs.append("10")
+        elif any(word in prompt_lower for word in ["second", "num2", "value2"]):
+            test_inputs.append("20")
+        elif any(word in prompt_lower for word in ["number", "num", "count", "quantity", "length", "size"]):
             test_inputs.append("42")
         elif any(word in prompt_lower for word in ["email", "address"]):
             test_inputs.append("test@example.com")
