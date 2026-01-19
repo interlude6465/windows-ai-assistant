@@ -31,6 +31,7 @@ from spectral.memory_reference_resolver import ReferenceResolver
 from spectral.memory_search import MemorySearch
 from spectral.orchestrator import Orchestrator
 from spectral.persistent_memory import MemoryModule
+from spectral.prompts import METASPLOIT_SYSTEM_PROMPT
 from spectral.reasoning import Plan, ReasoningModule
 from spectral.research_intent_handler import ResearchIntentHandler
 from spectral.response_generator import ResponseGenerator
@@ -445,6 +446,118 @@ class ChatSession:
 
         return "\n".join(lines) if lines else "No result information available."
 
+    def _is_metasploit_request(self, user_input: str) -> bool:
+        """
+        Detect if user request is related to Metasploit/penetration testing.
+
+        Args:
+            user_input: User's natural language input
+
+        Returns:
+            True if this is a Metasploit-related request
+        """
+        metasploit_keywords = [
+            "metasploit",
+            "msfconsole",
+            "msfvenom",
+            "payload",
+            "exploit",
+            "penetration test",
+            "pentest",
+            "reverse shell",
+            "meterpreter",
+            "create a payload",
+            "generate payload",
+            "hack",
+            "pen testing",
+            "exploit target",
+            "get shell",
+            "backdoor",
+            "ms17-010",
+            "eternalblue",
+            "privilege escalation",
+            "priv esc",
+            "cve-",
+            "vulnerability scan",
+            "msf>",
+            "search exploit",
+            "use exploit",
+            "handler",
+            "listener",
+        ]
+
+        input_lower = user_input.lower()
+        return any(keyword in input_lower for keyword in metasploit_keywords)
+
+    def _handle_metasploit_request(self, user_input: str) -> str:
+        """
+        Handle Metasploit-related requests with specialized system prompt.
+
+        Args:
+            user_input: User's natural language input
+
+        Returns:
+            Response from specialized Metasploit handler
+        """
+        logger.info("Metasploit request detected, using specialized handler")
+
+        # Add Metasploit knowledge context to response
+        try:
+            # Use the specialized Metasploit system prompt
+            if hasattr(self, "llm_client") and self.llm_client:
+                # Prepare messages with Metasploit system prompt
+                messages = [
+                    {"role": "system", "content": METASPLOIT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_input},
+                ]
+
+                # Get response from LLM
+                response = self.llm_client.chat(messages)
+
+                # Add to history
+                context = self.get_context_summary()
+                self.add_message(
+                    "user",
+                    user_input,
+                    metadata={"context": context, "intent": "metasploit", "metasploit": True},
+                )
+                self.add_message(
+                    "assistant", response, metadata={"intent": "metasploit", "metasploit": True}
+                )
+
+                return response
+            else:
+                # Fallback to basic response
+                fallback_response = (
+                    "I can help you with Metasploit penetration testing! "
+                    "I can guide you through:\n"
+                    "• Creating payloads for Windows and Linux\n"
+                    "• Finding and configuring exploits\n"
+                    "• Setting up listeners and handlers\n"
+                    "• Post-exploitation activities\n"
+                    "• Troubleshooting common issues\n\n"
+                    "Please tell me what you'd like to do. For example: "
+                    "'create a payload for my Windows 10 computer' or "
+                    "'help me exploit a target running Windows 7'."
+                )
+
+                self.add_message(
+                    "user", user_input, metadata={"intent": "metasploit", "metasploit": True}
+                )
+                self.add_message(
+                    "assistant",
+                    fallback_response,
+                    metadata={"intent": "metasploit", "metasploit": True},
+                )
+
+                return fallback_response
+
+        except Exception as e:
+            logger.error(f"Error in Metasploit handler: {e}")
+            error_msg = f"Error processing Metasploit request: {str(e)}"
+            self.add_message("assistant", error_msg, metadata={"error": str(e)})
+            return error_msg
+
     def _generate_conversational_response(
         self, user_input: str, execution_result: Optional[Dict[str, Any]]
     ) -> str:
@@ -533,6 +646,10 @@ class ChatSession:
             Formatted response string
         """
         logger.info(f"Processing user input in chat: {user_input}")
+
+        # Check for Metasploit requests first (specialized handling)
+        if self._is_metasploit_request(user_input):
+            return self._handle_metasploit_request(user_input)
 
         # Check intent first - handle casual conversation immediately
         intent = self.intent_classifier.classify_intent(user_input)

