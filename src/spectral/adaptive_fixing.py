@@ -6,6 +6,8 @@ re-running successful ones.
 """
 
 import logging
+import subprocess
+import sys
 from typing import List, Optional, Tuple, TypedDict
 
 from spectral.execution_models import CodeStep, FailureDiagnosis
@@ -15,6 +17,127 @@ from spectral.retry_parsing import format_attempt_progress
 from spectral.utils import AUTONOMOUS_CODE_REQUIREMENT, clean_code
 
 logger = logging.getLogger(__name__)
+
+
+# Common package name mappings (module_name -> pip_package_name)
+PACKAGE_NAME_MAPPING = {
+    "cv2": "opencv-python",
+    "PIL": "pillow",
+    "bs4": "beautifulsoup4",
+    "sklearn": "scikit-learn",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "matplotlib": "matplotlib",
+    "requests": "requests",
+    "beautifulsoup4": "beautifulsoup4",
+    "tensorflow": "tensorflow",
+    "torch": "torch",
+    "keras": "keras",
+    "seaborn": "seaborn",
+    "plotly": "plotly",
+    "flask": "flask",
+    "django": "django",
+    "fastapi": "fastapi",
+    "sqlalchemy": "sqlalchemy",
+    "pymongo": "pymongo",
+    "redis": "redis",
+    "celery": "celery",
+    "pytest": "pytest",
+    "unittest-xml-reporting": "unittest-xml-reporting",
+    "pygame": "pygame",
+    "tkinter": None,  # Built-in, don't try to install
+    "os": None,  # Built-in, don't try to install
+    "sys": None,  # Built-in, don't try to install
+    "json": None,  # Built-in, don't try to install
+    "re": None,  # Built-in, don't try to install
+    "datetime": None,  # Built-in, don't try to install
+    "pathlib": None,  # Built-in, don't try to install
+    "subprocess": None,  # Built-in, don't try to install
+    "threading": None,  # Built-in, don't try to install
+    "multiprocessing": None,  # Built-in, don't try to install
+    "queue": None,  # Built-in, don't try to install
+    "logging": None,  # Built-in, don't try to install
+    "tempfile": None,  # Built-in, don't try to install
+    "shutil": None,  # Built-in, don't try to install
+    "glob": None,  # Built-in, don't try to install
+    "urllib": None,  # Built-in, don't try to install
+    "http": None,  # Built-in, don't try to install
+    "email": None,  # Built-in, don't try to install
+    "xml": None,  # Built-in, don't try to install
+    "sqlite3": None,  # Built-in, don't try to install
+    "csv": None,  # Built-in, don't try to install
+    "configparser": None,  # Built-in, don't try to install
+    "argparse": None,  # Built-in, don't try to install
+    "getpass": None,  # Built-in, don't try to install
+    "platform": None,  # Built-in, don't try to install
+    "uuid": None,  # Built-in, don't try to install
+    "hashlib": None,  # Built-in, don't try to install
+    "hmac": None,  # Built-in, don't try to install
+    "secrets": None,  # Built-in, don't try to install
+    "base64": None,  # Built-in, don't try to install
+    "binascii": None,  # Built-in, don't try to install
+    "struct": None,  # Built-in, don't try to install
+    "codecs": None,  # Built-in, don't try to install
+    "io": None,  # Built-in, don't try to install
+    "collections": None,  # Built-in, don't try to install
+    "itertools": None,  # Built-in, don't try to install
+    "functools": None,  # Built-in, don't try to install
+    "operator": None,  # Built-in, don't try to install
+    "pickle": None,  # Built-in, don't try to install
+    "copy": None,  # Built-in, don't try to install
+    "pprint": None,  # Built-in, don't try to install
+    "reprlib": None,  # Built-in, don't try to install
+    "enum": None,  # Built-in, don't try to install
+    "abc": None,  # Built-in, don't try to install
+    "contextlib": None,  # Built-in, don't try to install
+    "weakref": None,  # Built-in, don't try to install
+    "types": None,  # Built-in, don't try to install
+    "copyreg": None,  # Built-in, don't try to install
+    "typing": None,  # Built-in, don't try to install
+    "warnings": None,  # Built-in, don't try to install
+    "dataclasses": None,  # Built-in, don't try to install
+    "ast": None,  # Built-in, don't try to install
+    "dis": None,  # Built-in, don't try to install
+    "inspect": None,  # Built-in, don't try to install
+    "traceback": None,  # Built-in, don't try to install
+    "linecache": None,  # Built-in, don't try to install
+    "tokenize": None,  # Built-in, don't try to install
+    "keyword": None,  # Built-in, don't try to install
+    "symtable": None,  # Built-in, don't try to install
+    "tabnanny": None,  # Built-in, don't try to install
+    "py_compile": None,  # Built-in, don't try to install
+    "compileall": None,  # Built-in, don't try to install
+    "filecmp": None,  # Built-in, don't try to install
+    "fnmatch": None,  # Built-in, don't try to install
+    "netrc": None,  # Built-in, don't try to install
+    "plistlib": None,  # Built-in, don't try to install
+    "mailcap": None,  # Built-in, don't try to install
+    "mimetypes": None,  # Built-in, don't try to install
+    "calendar": None,  # Built-in, don't try to install
+    "decimal": None,  # Built-in, don't try to install
+    "fractions": None,  # Built-in, don't try to install
+    "random": None,  # Built-in, don't try to install
+    "statistics": None,  # Built-in, don't try to install
+    "bisect": None,  # Built-in, don't try to install
+    "heapq": None,  # Built-in, don't try to install
+    "array": None,  # Built-in, don't try to install
+    "sched": None,  # Built-in, don't try to install
+    "email.mime": None,  # Built-in, don't try to install
+    "html": None,  # Built-in, don't try to install
+    "xml.etree.ElementTree": None,  # Built-in, don't try to install
+    "xml.dom": None,  # Built-in, don't try to install
+    "xml.sax": None,  # Built-in, don't try to install
+    "mailbox": None,  # Built-in, don't try to install
+    "msilib": None,  # Built-in, don't try to install
+    "audioop": None,  # Built-in, don't try to install
+    "colorsys": None,  # Built-in, don't try to install
+    "imghdr": None,  # Built-in, don't try to install
+    "sndhdr": None,  # Built-in, don't try to install
+    "string": None,  # Built-in, don't try to install
+    "textwrap": None,  # Built-in, don't try to install
+    "unicodedata": None,  # Built-in, don't try to install
+    "locale": None,  # Built-in, don't try to install
+}
 
 
 class RetryHistoryEntry(TypedDict):
@@ -49,7 +172,74 @@ class AdaptiveFixEngine:
         self.mistake_learner = mistake_learner or MistakeLearner()
         self.default_max_retries: Optional[int] = None
         self.retry_history: dict[str, RetryHistoryEntry] = {}
+        # Track installation attempts to prevent infinite loops
+        self.install_history: dict[str, int] = {}
         logger.info("AdaptiveFixEngine initialized with unlimited retries by default")
+
+    def install_missing_package(self, module_name: str) -> bool:
+        """
+        Install missing package using pip.
+
+        Args:
+            module_name: Name of the missing module
+
+        Returns:
+            True if installation succeeded, False otherwise
+        """
+        # Check if we've tried this package too many times
+        if module_name in self.install_history and self.install_history[module_name] >= 2:
+            logger.warning(f"Skipping {module_name} - already attempted 2+ times")
+            return False
+
+        # Get the pip package name
+        pip_package = PACKAGE_NAME_MAPPING.get(module_name)
+        if pip_package is None:
+            # Check if it's a common pattern or just use the module name
+            if module_name in PACKAGE_NAME_MAPPING:
+                logger.info(f"Module {module_name} is built-in, no installation needed")
+                return False
+            else:
+                # Try to install using the module name as-is
+                pip_package = module_name
+
+        # Track this installation attempt
+        if module_name not in self.install_history:
+            self.install_history[module_name] = 0
+        self.install_history[module_name] += 1
+
+        logger.info(f"Installing package: {pip_package} for module {module_name}")
+
+        try:
+            # Install the package
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", pip_package],
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout for installations
+            )
+
+            if result.returncode == 0:
+                logger.info(f"Successfully installed {pip_package}")
+                # Verify the module can now be imported
+                try:
+                    __import__(module_name)
+                    logger.info(f"Verified {module_name} can be imported after installation")
+                    return True
+                except ImportError:
+                    logger.warning(
+                        f"Module {module_name} still cannot be imported after installation"
+                    )
+                    return False
+            else:
+                logger.error(f"Failed to install {pip_package}: {result.stderr}")
+                return False
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"Installation timeout for {pip_package}")
+            return False
+        except Exception as e:
+            logger.error(f"Error installing {pip_package}: {e}")
+            return False
 
     def diagnose_failure(
         self,
@@ -71,6 +261,36 @@ class AdaptiveFixEngine:
             FailureDiagnosis with root cause and suggested fix
         """
         logger.info(f"Diagnosing failure for step {step.step_number}: {error_type}")
+
+        # Handle ModuleNotFoundError and ImportError with auto-installation
+        if error_type in ["ModuleNotFoundError", "ImportError"]:
+            module_name = self._extract_module_name_from_error(error_details)
+            if module_name:
+                logger.info(f"Detected missing module: {module_name}")
+
+                # Try to install the package
+                install_success = self.install_missing_package(module_name)
+
+                if install_success:
+                    logger.info(f"Successfully installed {module_name}, retrying execution")
+                    return FailureDiagnosis(
+                        error_type=error_type,
+                        error_details=error_details,
+                        root_cause=f"Missing module '{module_name}' - now installed",
+                        suggested_fix="Module installed, retry original code",
+                        fix_strategy="retry_after_install",
+                        confidence=0.9,
+                    )
+                else:
+                    logger.warning(f"Failed to install {module_name}")
+                    return FailureDiagnosis(
+                        error_type=error_type,
+                        error_details=error_details,
+                        root_cause=f"Missing module '{module_name}' - installation failed",
+                        suggested_fix=f"Manual installation required: pip install {module_name}",
+                        fix_strategy="manual",
+                        confidence=0.8,
+                    )
 
         prompt = self._build_diagnosis_prompt(step, error_type, error_details, original_output)
 
@@ -136,6 +356,39 @@ class AdaptiveFixEngine:
                 fix_strategy="manual",
                 confidence=0.3,
             )
+
+    def _extract_module_name_from_error(self, error_details: str) -> Optional[str]:
+        """
+        Extract module name from ImportError or ModuleNotFoundError details.
+
+        Args:
+            error_details: Error details string
+
+        Returns:
+            Module name if found, None otherwise
+        """
+        import re
+
+        # Common patterns for missing module errors
+        patterns = [
+            r"No module named ['\"]([^'\"]+)['\"]",
+            r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]",
+            r"ImportError: No module named ['\"]([^'\"]+)['\"]",
+            r"No module named '([^']+)'",
+            r"No module named \"([^\"]+)\"",
+            r"Module '([^']+)' not found",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, error_details)
+            if match:
+                module_name = match.group(1)
+                # Remove dotted module prefix to get the base package name
+                if "." in module_name:
+                    module_name = module_name.split(".")[0]
+                return module_name
+
+        return None
 
     def generate_fix(self, step: CodeStep, diagnosis: FailureDiagnosis, retry_count: int) -> str:
         """

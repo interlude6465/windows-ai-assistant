@@ -11,6 +11,7 @@ from typing import Optional, Union
 from spectral.config import JarvisConfig, SpectralConfig
 from spectral.execution_models import ExecutionMode
 from spectral.execution_router import ExecutionRouter
+from spectral.llm_client import LLMClient
 from spectral.research import KnowledgePack, ResearchOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class ResearchIntentHandler:
         self,
         config: Optional[Union[SpectralConfig, JarvisConfig]] = None,
         research_orchestrator: Optional[ResearchOrchestrator] = None,
+        llm_client: Optional[LLMClient] = None,
     ):
         """
         Initialize research intent handler.
@@ -32,9 +34,11 @@ class ResearchIntentHandler:
                 initialization)
             research_orchestrator: ResearchOrchestrator instance (creates default
                 from config if None)
+            llm_client: LLM client for generating actionable code
         """
         self.research_orchestrator = research_orchestrator or ResearchOrchestrator(config=config)
         self.router = ExecutionRouter()
+        self.llm_client = llm_client
         logger.info("ResearchIntentHandler initialized")
 
     def should_research(self, user_input: str) -> bool:
@@ -79,6 +83,13 @@ class ResearchIntentHandler:
                 return msg, pack
 
             response = self._format_knowledge_pack(pack, mode)
+
+            # For RESEARCH_AND_ACT mode, generate actionable code based on research
+            if mode == ExecutionMode.RESEARCH_AND_ACT:
+                code_response = self._generate_actionable_code(user_input, pack)
+                if code_response:
+                    response += "\n\n" + code_response
+
             return response, pack
 
         except Exception as e:
@@ -89,6 +100,90 @@ class ResearchIntentHandler:
                 "You can try rephrasing your question or ask me something else."
             )
             return response, None
+
+    def _generate_actionable_code(self, user_input: str, pack: KnowledgePack) -> Optional[str]:
+        """
+        Generate actionable code based on research results.
+
+        Args:
+            user_input: Original user query
+            pack: KnowledgePack with research results
+
+        Returns:
+            Generated code string or None if not applicable
+        """
+        try:
+            if not self.llm_client:
+                logger.warning("No LLM client available for code generation")
+                return None
+
+            # Extract key information from research
+            commands = pack.commands or []
+            steps = pack.steps or []
+
+            if not commands and not steps:
+                return None
+
+            # Build context for code generation
+            context_parts = []
+
+            if commands:
+                context_parts.append("Commands from research:")
+                for cmd in commands[:5]:  # Limit to first 5 commands
+                    command_text = cmd.get("command_text", "")
+                    description = cmd.get("description", "")
+                    platform = cmd.get("platform", "")
+                    if command_text:
+                        context_parts.append(f"- {command_text}")
+                        if description:
+                            context_parts.append(f"  Purpose: {description}")
+                        if platform:
+                            context_parts.append(f"  Platform: {platform}")
+
+            if steps:
+                context_parts.append("\nSteps from research:")
+                for step in steps[:5]:  # Limit to first 5 steps
+                    title = step.get("title", "")
+                    description = step.get("description", "")
+                    if title:
+                        context_parts.append(f"- {title}")
+                    if description:
+                        context_parts.append(f"  Description: {description}")
+
+            research_context = "\n".join(context_parts)
+
+            # Generate code that uses the research findings
+            prompt = (
+                f'Based on the following research about "{user_input}", '
+                "generate Python code that implements or demonstrates the concepts found:\n\n"
+                f"Research findings:\n{research_context}\n\n"
+                "Requirements:\n"
+                "1. Generate actual, working Python code\n"
+                "2. Use the commands and steps from the research where applicable\n"
+                "3. Include proper error handling\n"
+                "4. Add comments explaining how this relates to the research\n"
+                "5. If the research contains specific commands, show how to use them in Python\n"
+                "6. Focus on practical, executable examples\n"
+                "7. Include any necessary installation instructions at the top\n\n"
+                "Generate code that helps the user accomplish their goal based on what we "
+                "researched. Start with a brief explanation of what the code does, then "
+                "provide the actual code."
+            )
+
+            code_response = self.llm_client.generate(prompt)
+
+            # Clean up the response and format it nicely
+            if code_response:
+                # Add a header to make it clear this is actionable code
+                formatted_response = f"**Actionable Code Based on Research:**\n\n{code_response}"
+                logger.info("Successfully generated actionable code from research")
+                return formatted_response
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to generate actionable code: {e}")
+            return None
 
     def _format_knowledge_pack(self, pack: KnowledgePack, mode: ExecutionMode) -> str:
         """

@@ -7,6 +7,7 @@ dependencies and validation methods.
 
 import json
 import logging
+import re
 from typing import List, Optional
 
 from spectral.execution_models import CodeStep
@@ -169,7 +170,9 @@ Guidelines for reducing steps:
 - Combine validation into execution steps
 - Error handling should be part of main code, not separate steps
 
-Respond with valid JSON:
+CRITICAL: You MUST respond with VALID JSON only, no additional text.
+
+Format:
 {{
   "steps": [
     {{
@@ -186,7 +189,11 @@ Respond with valid JSON:
   ]
 }}
 
-Notes:
+Rules:
+- No text before or after JSON
+- Use double quotes only (not single quotes)
+- No trailing commas
+- All strings properly escaped
 - Steps should be in logical order
 - MAXIMUM 4 steps for complex tasks
 - Each step should be substantial (not just "prepare" or "setup")
@@ -202,7 +209,7 @@ Return only valid JSON, no other text."""
 
     def _parse_breakdown(self, breakdown: str, user_request: str) -> List[CodeStep]:
         """
-        Parse LLM response into CodeStep objects.
+        Parse LLM response into CodeStep objects with robust JSON parsing.
 
         Args:
             breakdown: LLM response string
@@ -211,44 +218,147 @@ Return only valid JSON, no other text."""
         Returns:
             List of CodeStep objects
         """
+        logger.info("Starting robust JSON parsing")
+        logger.debug(f"Raw response: {breakdown[:500]}...")
+
         try:
-            # Extract JSON from response
+            # First, try strict JSON parsing
             json_text = self._extract_json_from_response(breakdown)
+            logger.debug(f"Extracted JSON text: {json_text[:300]}...")
             data = json.loads(json_text)
 
-            steps_data = data.get("steps", [])
-            if not steps_data:
-                logger.warning("No steps in breakdown response, using fallback")
-                return self._create_simple_step(user_request)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Strict JSON parsing failed: {e}")
 
-            steps: List[CodeStep] = []
-            for step_data in steps_data:
+            # Try to fix common JSON issues and parse again
+            try:
+                fixed_json = self._fix_common_json_issues(breakdown)
+                logger.debug(f"Fixed JSON: {fixed_json[:300]}...")
+                data = json.loads(fixed_json)
+            except (json.JSONDecodeError, ValueError) as e2:
+                logger.warning(f"Fixed JSON parsing also failed: {e2}")
+
+                # Final fallback: extract steps using regex
+                logger.warning("Falling back to regex-based step extraction")
+                return self._extract_steps_with_regex(breakdown, user_request)
+
+        steps_data = data.get("steps", [])
+        if not steps_data:
+            logger.warning("No steps in breakdown response, using fallback")
+            return self._create_simple_step(user_request)
+
+        steps: List[CodeStep] = []
+        for step_data in steps_data:
+            try:
+                step = CodeStep(
+                    step_number=step_data.get("step_number", len(steps) + 1),
+                    description=step_data.get("description", ""),
+                    code=None,  # Code will be generated later
+                    is_code_execution=step_data.get("is_code_execution", True),
+                    validation_method=step_data.get("validation_method", "output_pattern"),
+                    expected_output_pattern=step_data.get("expected_output_pattern"),
+                    dependencies=step_data.get("dependencies", []),
+                    timeout_seconds=step_data.get("timeout_seconds", 30),
+                    max_retries=self._sanitize_max_retries(step_data.get("max_retries")),
+                    status="pending",
+                )
+                steps.append(step)
+            except Exception as e:
+                logger.warning(f"Failed to parse step: {e}")
+                continue
+
+        if not steps:
+            logger.warning("No valid steps parsed, using fallback")
+            return self._create_simple_step(user_request)
+
+        return steps
+
+    def _fix_common_json_issues(self, text: str) -> str:
+        """
+        Fix common JSON formatting issues in LLM responses.
+
+        Args:
+            text: Raw text that should be JSON
+
+        Returns:
+            Fixed JSON string
+        """
+        # Remove any markdown code block indicators
+        text = re.sub(r"```json\s*", "", text)
+        text = re.sub(r"\s*```", "", text)
+
+        # Extract just the JSON part if there's extra text
+        json_start = text.find("{")
+        json_end = text.rfind("}")
+        if json_start >= 0 and json_end > json_start:
+            text = text[json_start : json_end + 1]
+
+        # Fix single quotes to double quotes
+        text = re.sub(r"'([^']*)':", r'"\1":', text)  # Keys
+        text = re.sub(r":\s*'([^']*)'", r': "\1"', text)  # String values
+        text = re.sub(r":\s*'([^']*)'", r': "\1"', text)  # More string values
+
+        # Remove trailing commas in objects and arrays
+        text = re.sub(r",(\s*[}\]])", r"\1", text)
+
+        # Fix unescaped newlines in strings (basic fix)
+        text = re.sub(r'"([^"]*)"([^,}\]])', r'"\1"\2', text)
+
+        return text
+
+    def _extract_steps_with_regex(self, text: str, user_request: str) -> List[CodeStep]:
+        """
+        Extract steps using regex when JSON parsing fails completely.
+
+        Args:
+            text: Raw response text
+            user_request: Original user request
+
+        Returns:
+            List of CodeStep objects
+        """
+        logger.info("Using regex fallback for step extraction")
+
+        steps = []
+        step_patterns = [
+            r"Step\s*(\d+):\s*([^\n]+)",
+            r"(\d+)\.\s*([^\n]+)",
+            r"Step\s*(\d+)\s*-\s*([^\n]+)",
+            r"(\d+)\)\s*([^\n]+)",
+        ]
+
+        found_steps = []
+        for pattern in step_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE | re.MULTILINE)
+            if matches:
+                found_steps = matches
+                break
+
+        if found_steps:
+            for i, (step_num, description) in enumerate(found_steps):
                 try:
                     step = CodeStep(
-                        step_number=step_data.get("step_number", len(steps) + 1),
-                        description=step_data.get("description", ""),
-                        code=None,  # Code will be generated later
-                        is_code_execution=step_data.get("is_code_execution", True),
-                        validation_method=step_data.get("validation_method", "output_pattern"),
-                        expected_output_pattern=step_data.get("expected_output_pattern"),
-                        dependencies=step_data.get("dependencies", []),
-                        timeout_seconds=step_data.get("timeout_seconds", 30),
-                        max_retries=self._sanitize_max_retries(step_data.get("max_retries")),
+                        step_number=int(step_num) if step_num.isdigit() else i + 1,
+                        description=description.strip(),
+                        code=None,
+                        is_code_execution=True,
+                        validation_method="output_pattern",
+                        dependencies=[],
+                        timeout_seconds=30,
+                        max_retries=None,
                         status="pending",
                     )
                     steps.append(step)
                 except Exception as e:
-                    logger.warning(f"Failed to parse step: {e}")
+                    logger.warning(f"Failed to create step from regex match: {e}")
                     continue
 
-            if not steps:
-                logger.warning("No valid steps parsed, using fallback")
-                return self._create_simple_step(user_request)
-
-            return steps
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Failed to parse breakdown JSON: {e}")
+        if not steps:
+            logger.warning("No steps found via regex, creating simple step")
             return self._create_simple_step(user_request)
+
+        logger.info(f"Extracted {len(steps)} steps via regex")
+        return steps
 
     def _sanitize_max_retries(self, value: object) -> Optional[int]:
         if value is None:

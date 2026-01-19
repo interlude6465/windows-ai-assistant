@@ -82,7 +82,14 @@ class DirectExecutor:
         """
         if self.gui_callback:
             try:
+                # Add timestamp to all events for better tracking
+                from datetime import datetime
+
+                if "timestamp" not in data:
+                    data["timestamp"] = datetime.now().isoformat()
+
                 self.gui_callback(event_type, data)
+                logger.debug(f"GUI event emitted: {event_type} with data: {data}")
             except Exception as e:
                 logger.debug(f"GUI callback error: {e}")
 
