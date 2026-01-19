@@ -6,8 +6,8 @@ Provides event bus for emitting code generation events to subscribers
 """
 
 import logging
-from typing import Callable, Dict, List, Optional
 import threading
+from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -81,53 +81,28 @@ class GenerationEventBus:
     # Convenience methods for specific events
     def emit_generation_start(self, prompt: str, request_id: str) -> None:
         """Emit generation_start event."""
-        self.emit("generation_start", {
-            "prompt": prompt,
-            "request_id": request_id
-        })
+        self.emit("generation_start", {"prompt": prompt, "request_id": request_id})
 
-    def emit_code_chunk(
-        self,
-        code: str,
-        chunk_index: int,
-        request_id: str
-    ) -> None:
+    def emit_code_chunk(self, code: str, chunk_index: int, request_id: str) -> None:
         """Emit code_chunk event."""
-        self.emit("code_chunk", {
-            "code": code,
-            "chunk_index": chunk_index,
-            "request_id": request_id
-        })
+        self.emit(
+            "code_chunk", {"code": code, "chunk_index": chunk_index, "request_id": request_id}
+        )
 
     def emit_generation_complete(
-        self,
-        final_code: str,
-        status: str,
-        request_id: str,
-        metadata: Optional[dict] = None
+        self, final_code: str, status: str, request_id: str, metadata: Optional[dict] = None
     ) -> None:
         """Emit generation_complete event."""
-        data = {
-            "final_code": final_code,
-            "status": status,
-            "request_id": request_id
-        }
+        data = {"final_code": final_code, "status": status, "request_id": request_id}
         if metadata:
             data.update(metadata)
         self.emit("generation_complete", data)
 
-    def emit_generation_error(
-        self,
-        error: str,
-        attempt: int,
-        request_id: str
-    ) -> None:
+    def emit_generation_error(self, error: str, attempt: int, request_id: str) -> None:
         """Emit generation_error event."""
-        self.emit("generation_error", {
-            "error": error,
-            "attempt": attempt,
-            "request_id": request_id
-        })
+        self.emit(
+            "generation_error", {"error": error, "attempt": attempt, "request_id": request_id}
+        )
 
 
 # Global event bus instance

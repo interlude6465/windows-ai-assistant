@@ -31,6 +31,26 @@ class SandboxState(str, Enum):
     CLEANED = "cleaned"
 
 
+class Sandbox:
+    """Represents an isolated sandbox for code execution."""
+
+    def __init__(self, sandbox_id: str, path: Path):
+        self.sandbox_id = sandbox_id
+        self.path = path
+        self.state = SandboxState.IDLE
+        self.files: List[str] = []
+
+    def update_state(self, state: SandboxState) -> None:
+        """Update sandbox state."""
+        self.state = state
+        logger.info(f"Sandbox {self.sandbox_id} state updated to {state}")
+
+    def add_file(self, filename: str) -> None:
+        """Track a file added to the sandbox."""
+        if filename not in self.files:
+            self.files.append(filename)
+
+
 @dataclass
 class SandboxResult:
     """Result of sandbox execution with verification gates."""
@@ -88,6 +108,21 @@ class SandboxRunManager:
 
         logger.info(f"Created sandbox run: {run_id} at {run_path}")
         return run_id
+
+    def create_sandbox(self, run_id: Optional[str] = None) -> Sandbox:
+        """
+        Create a new sandbox and return a Sandbox object.
+        For backward compatibility with SandboxExecutionSystem.
+        """
+        sid = self.create_run(run_id)
+        return Sandbox(sid, self.get_run_path(sid))
+
+    def cleanup_sandbox(self, sandbox_id: str) -> None:
+        """
+        Clean up a sandbox by ID.
+        For backward compatibility with SandboxExecutionSystem.
+        """
+        self.cleanup_run(sandbox_id)
 
     def get_run_path(self, run_id: str) -> Path:
         """
@@ -396,7 +431,7 @@ class SandboxRunManager:
             "smoke": False,
         }
 
-        test_paths = []
+        test_paths: List[Path] = []
         error_message = None
         pytest_summary = None
 

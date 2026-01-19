@@ -99,9 +99,7 @@ class LiveCodeEditor(ctk.CTkFrame):
         self.title_label.pack(pady=(5, 0), padx=10, anchor="w")
 
         # Metadata label (request ID, timestamp, file path)
-        self.metadata_label = ctk.CTkLabel(
-            self, text="", font=("Arial", 9), text_color="#8BE9FD"
-        )
+        self.metadata_label = ctk.CTkLabel(self, text="", font=("Arial", 9), text_color="#8BE9FD")
         self.metadata_label.pack(pady=(0, 2), padx=10, anchor="w")
 
         # Code count label
@@ -153,10 +151,7 @@ class LiveCodeEditor(ctk.CTkFrame):
         self._update_count()
 
     def set_metadata(
-        self,
-        request_id: str,
-        timestamp: Optional[str] = None,
-        file_path: Optional[str] = None
+        self, request_id: str, timestamp: Optional[str] = None, file_path: Optional[str] = None
     ) -> None:
         """
         Set metadata information (request ID, timestamp, file path).

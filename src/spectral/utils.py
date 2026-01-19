@@ -258,7 +258,7 @@ def extract_input_calls(code: str) -> List[ast.Call]:
     Returns:
         List of input Call nodes with their line numbers
     """
-    input_calls = []
+    input_calls: List[ast.Call] = []
 
     try:
         tree = ast.parse(code)
@@ -310,9 +310,9 @@ def detect_input_calls(code: str) -> Tuple[int, List[str]]:
                 # Extract prompt if present
                 prompt = ""
                 if node.args and isinstance(node.args[0], ast.Constant):
-                    prompt = node.args[0].value
+                    prompt = str(node.args[0].value)
                 elif node.args and isinstance(node.args[0], ast.Str):  # Python 3.7/3.8
-                    prompt = node.args[0].s
+                    prompt = str(node.args[0].s)
                 prompts.append(prompt)
 
     return input_count, prompts

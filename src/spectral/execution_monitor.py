@@ -9,7 +9,7 @@ import logging
 import re
 import subprocess
 import sys
-from typing import Generator, List, Optional, Tuple
+from typing import Any, Callable, Generator, List, Optional, Tuple
 
 from spectral.execution_models import CodeStep
 from spectral.utils import clean_code, detect_input_calls, generate_test_inputs
@@ -51,10 +51,10 @@ class ExecutionMonitor:
 
     def __init__(self) -> None:
         """Initialize the execution monitor."""
-        self.gui_callback = None
+        self.gui_callback: Optional[Callable[..., Any]] = None
         logger.info("ExecutionMonitor initialized")
 
-    def set_gui_callback(self, gui_callback: Optional[callable] = None) -> None:
+    def set_gui_callback(self, gui_callback: Optional[Callable[..., Any]] = None) -> None:
         """
         Set the GUI callback for sandbox viewer updates.
 
@@ -355,12 +355,17 @@ class ExecutionMonitor:
 
             # Send all inputs joined with newlines
             input_data = "\n".join(test_inputs) + "\n"
-            process.stdin.write(input_data)
-            process.stdin.flush()
+            if process.stdin:
+                process.stdin.write(input_data)
+                process.stdin.flush()
 
             # Read output in real-time
             while True:
-                line = process.stdout.readline()
+                if process.stdout:
+                    line = process.stdout.readline()
+                else:
+                    line = ""
+
                 if not line and process.poll() is not None:
                     break
 

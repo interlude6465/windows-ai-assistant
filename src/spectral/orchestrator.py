@@ -237,7 +237,7 @@ class Orchestrator:
                     )
 
                     # Log execution summary
-                    logger.info(f"========== EXECUTION COMPLETE ==========")
+                    logger.info("========== EXECUTION COMPLETE ==========")
                     logger.info(f"Success: {report.successful}")
                     logger.info(f"Verified: {report.verified}")
                     logger.info(f"Total attempts: {report.total_attempts}")
@@ -251,7 +251,9 @@ class Orchestrator:
                     result = self.system_action_router.route_action(action_type, **params)
 
                     logger.info(
-                        f"Action result from router: success={result.success}, message={result.message}"
+                        "Action result from router: success=%s, message=%s",
+                        result.success,
+                        result.message,
                     )
 
                     # Simple verification if enabled
@@ -340,6 +342,13 @@ class Orchestrator:
 
         # Define the action function
         def action_func(**kwargs: Any) -> ActionResult:
+            if self.system_action_router is None:
+                return ActionResult(
+                    success=False,
+                    action_type=action_type,
+                    message="System action router not available",
+                    error="Not available",
+                )
             return self.system_action_router.route_action(action_type, **kwargs)
 
         # Define the verification function
@@ -348,14 +357,19 @@ class Orchestrator:
                 return self.execution_verifier.verify_action(atype, result, **vparams)
             return None
 
-        # Execute with retry
-        return self.strategy_executor.execute_with_retry(
+        if self.strategy_executor is None:
+            # Fallback if strategy executor is not available
+            action_result = action_func(**params)
+            return action_result, []
+
+        result_retry: tuple[ActionResult, List[Any]] = self.strategy_executor.execute_with_retry(
             action_func=action_func,
             action_type=action_type,
             original_params=params,
             verify_func=verify_func if self.enable_verification else None,
             dry_run=dry_run,
         )
+        return result_retry
 
     def _parse_action_from_description(
         self, description: str, tool: str
@@ -786,8 +800,8 @@ class Orchestrator:
         Returns:
             List of matching tool names
         """
-        if self.memory_store:
-            return self.memory_store.search_capabilities(query)
+        if self.memory_store is not None:
+            return list(self.memory_store.search_capabilities(query))
         return []
 
     def list_available_tools(self) -> List[str]:
@@ -797,6 +811,6 @@ class Orchestrator:
         Returns:
             List of tool names
         """
-        if self.memory_store:
-            return self.memory_store.list_capabilities()
+        if self.memory_store is not None:
+            return list(self.memory_store.list_capabilities())
         return []

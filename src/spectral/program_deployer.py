@@ -225,7 +225,7 @@ class ProgramDeployer:
             "",
             "Usage:",
             "1. Make sure Python is installed: https://python.org/downloads/",
-            f"2. Run from terminal/command prompt:",
+            "2. Run from terminal/command prompt:",
             f"   python {program_path.name}",
             "",
             "Requirements:",

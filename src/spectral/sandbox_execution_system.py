@@ -13,7 +13,7 @@ This module integrates:
 
 import logging
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from spectral.code_cleaner import CodeCleaner
 from spectral.execution_debugger import ExecutionDebugger
@@ -80,7 +80,7 @@ class SandboxExecutionSystem:
         user_request: str,
         language: str = "python",
         max_retries: int = 10,
-        gui_callback: Optional[Callable] = None,
+        gui_callback: Optional[Callable[..., Any]] = None,
     ) -> dict:
         """
         Execute a user request with full sandbox workflow.
@@ -96,7 +96,7 @@ class SandboxExecutionSystem:
         """
         log_id = self.debugger.start_session(user_request) if self.debugger.enabled else None
 
-        result = {
+        result: dict[str, Any] = {
             "success": False,
             "code": None,
             "file_path": None,
@@ -200,7 +200,7 @@ class SandboxExecutionSystem:
         user_request: str,
         language: str,
         log_id: Optional[str],
-        gui_callback: Optional[Callable] = None,
+        gui_callback: Optional[Callable[..., Any]] = None,
     ) -> Optional[str]:
         """
         Generate code using LLM with learned patterns.
@@ -246,7 +246,7 @@ class SandboxExecutionSystem:
                 {"count": input_count, "code_preview": cleaned_code[:200]},
             )
 
-            return cleaned_code
+            return str(cleaned_code)
 
         except Exception as e:
             logger.error(f"Code generation failed: {e}")
@@ -298,7 +298,7 @@ Requirements:
         script_path: Path,
         analysis: dict,
         log_id: Optional[str],
-        gui_callback: Optional[Callable],
+        gui_callback: Optional[Callable[..., Any]],
     ) -> list:
         """
         Run tests for the program.
@@ -398,7 +398,9 @@ Requirements:
         }
         return extensions.get(language.lower(), "txt")
 
-    def _notify_gui(self, callback: Optional[callable], event_type: str, data: dict) -> None:
+    def _notify_gui(
+        self, callback: Optional[Callable[..., Any]], event_type: str, data: dict
+    ) -> None:
         """
         Notify GUI of updates.
 

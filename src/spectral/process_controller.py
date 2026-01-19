@@ -6,6 +6,8 @@ stdout/stderr capture, and graceful termination of process trees.
 """
 
 import logging
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -13,12 +15,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+try:
+    import psutil
+except ImportError:
+    psutil = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ProcessResult:
     """Result of a subprocess execution."""
+
     exit_code: int
     stdout: str
     stderr: str
@@ -30,7 +38,7 @@ class ProcessResult:
 class ProcessController:
     """
     Executes subprocesses with configurable timeout and output capture.
-    
+
     Features:
     - Live output capture to log files
     - Timeout detection and graceful kill
@@ -40,12 +48,8 @@ class ProcessController:
 
     def __init__(self) -> None:
         """Initialize process controller."""
-        try:
-            import psutil
-            self.psutil = psutil
-        except ImportError:
+        if psutil is None:
             logger.warning("psutil not available, using fallback process management")
-            self.psutil = None
 
     def run_subprocess(
         self,
@@ -68,23 +72,23 @@ class ProcessController:
         """
         start_time = time.time()
         log_file = log_file or Path.cwd() / "process_log.txt"
-        
+
         logger.info(f"Running subprocess: {' '.join(cmd)}")
         logger.info(f"Working directory: {cwd}")
         logger.info(f"Timeout: {timeout}s")
         logger.info(f"Log file: {log_file}")
 
         # Initialize variables to ensure they're available in except handlers
-        stdout_lines = []
-        stderr_lines = []
-        exit_code = -1
+        stdout_lines: List[str] = []
+        stderr_lines: List[str] = []
+        exit_code: Optional[int] = -1
         timed_out = False
         process = None
 
         try:
             # Create log directory
             log_file.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # Prepare process creation flags
             creation_flags = 0
             if sys.platform == "win32":
@@ -100,7 +104,7 @@ class ProcessController:
                 bufsize=1,
                 creationflags=creation_flags,
             )
-            
+
             # Stream output in real-time while process runs
             with open(log_file, "w", encoding="utf-8") as log_f:
                 log_f.write(f"Command: {' '.join(cmd)}\n")
@@ -116,37 +120,43 @@ class ProcessController:
                     exit_code = process.poll()
                     if exit_code is not None:
                         # Process finished, read any remaining output
-                        remaining_output = process.stdout.read()
-                        if remaining_output:
-                            lines = remaining_output.splitlines(keepends=True)
-                            for line in lines:
-                                stdout_lines.append(line)
-                                log_f.write(line)
+                        if process.stdout:
+                            remaining_output = process.stdout.read()
+                            if remaining_output:
+                                lines = remaining_output.splitlines(keepends=True)
+                                for line in lines:
+                                    stdout_lines.append(line)
+                                    log_f.write(line)
                         break
 
                     # Read available output with short timeout (0.1s)
                     try:
-                        readable, _, _ = select.select([process.stdout], [], [], 0.1)
-                        if readable:
-                            line = process.stdout.readline()
-                            if line:
-                                stdout_lines.append(line)
-                                log_f.write(line)
-                                log_f.flush()
+                        if process.stdout:
+                            readable, _, _ = select.select([process.stdout], [], [], 0.1)
+                            if readable:
+                                line = process.stdout.readline()
+                                if line:
+                                    stdout_lines.append(line)
+                                    log_f.write(line)
+                                    log_f.flush()
+                            else:
+                                # Check elapsed time for timeout
+                                elapsed = time.time() - start_time
+                                if elapsed >= timeout:
+                                    logger.warning(
+                                        "Process timeout after %ss, killing process", timeout
+                                    )
+                                    timed_out = True
+                                    self._kill_process_tree(process.pid)
+                                    # Wait for process to terminate
+                                    process.wait(timeout=1)
+                                    exit_code = process.poll()
+                                    if exit_code is None or exit_code < 0:
+                                        # Process was killed by signal, normalize to -1
+                                        exit_code = -1
+                                    break
                         else:
-                            # Check elapsed time for timeout
-                            elapsed = time.time() - start_time
-                            if elapsed >= timeout:
-                                logger.warning(f"Process timeout after {timeout}s, killing process")
-                                timed_out = True
-                                self._kill_process_tree(process.pid)
-                                # Wait for process to terminate
-                                process.wait(timeout=1)
-                                exit_code = process.poll()
-                                if exit_code is None or exit_code < 0:
-                                    # Process was killed by signal, normalize to -1
-                                    exit_code = -1
-                                break
+                            break
                     except Exception as e:
                         logger.warning(f"Error reading process output: {e}")
                         break
@@ -166,11 +176,11 @@ class ProcessController:
         except subprocess.TimeoutExpired:
             duration = time.time() - start_time
             logger.warning(f"Process timed out after {timeout}s")
-            
+
             # Kill process tree if process was created
             if process is not None:
                 self._kill_process_tree(process.pid)
-            
+
             return ProcessResult(
                 exit_code=-1,
                 stdout="".join(stdout_lines),
@@ -183,11 +193,11 @@ class ProcessController:
         except Exception as e:
             duration = time.time() - start_time
             logger.error(f"Subprocess execution failed: {e}")
-            
+
             # Kill process if still running
             if process is not None:
                 self._kill_process_tree(process.pid)
-            
+
             return ProcessResult(
                 exit_code=-1,
                 stdout="".join(stdout_lines),
@@ -217,7 +227,7 @@ class ProcessController:
             ProcessResult with execution details
         """
         start_time = time.time()
-        
+
         logger.info(f"Running subprocess with stdin: {' '.join(cmd)}")
         logger.info(f"Stdin data: {stdin_data[:100]}...")
 
@@ -241,9 +251,9 @@ class ProcessController:
                 stdout, stderr = process.communicate(input=stdin_data, timeout=timeout)
                 exit_code = process.returncode
                 duration = time.time() - start_time
-                
+
                 logger.info(f"Process completed with exit code {exit_code}")
-                
+
                 return ProcessResult(
                     exit_code=exit_code,
                     stdout=stdout or "",
@@ -256,9 +266,9 @@ class ProcessController:
             except subprocess.TimeoutExpired:
                 duration = time.time() - start_time
                 logger.warning(f"Process timed out after {timeout}s")
-                
+
                 self._kill_process_tree(process.pid)
-                
+
                 return ProcessResult(
                     exit_code=-1,
                     stdout="",
@@ -271,10 +281,10 @@ class ProcessController:
         except Exception as e:
             duration = time.time() - start_time
             logger.error(f"Subprocess with stdin failed: {e}")
-            
-            if 'process' in locals():
+
+            if "process" in locals():
                 self._kill_process_tree(process.pid)
-            
+
             return ProcessResult(
                 exit_code=-1,
                 stdout="",
@@ -292,24 +302,24 @@ class ProcessController:
             pid: Process ID to terminate
         """
         try:
-            if self.psutil:
+            if psutil:
                 # Use psutil for robust process tree termination
                 try:
-                    parent = self.psutil.Process(pid)
+                    parent = psutil.Process(pid)
                     children = parent.children(recursive=True)
-                    
+
                     logger.info(f"Killing process tree: PID {pid} with {len(children)} children")
-                    
+
                     # Kill all children first
                     for child in children:
                         try:
                             child.kill()
                         except (psutil.NoSuchProcess, psutil.AccessDenied):
                             pass
-                    
+
                     # Kill parent
                     parent.kill()
-                    
+
                 except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
                     logger.warning(f"psutil failed to kill process {pid}: {e}")
                     # Fall back to system command
@@ -317,7 +327,7 @@ class ProcessController:
             else:
                 # Fallback without psutil
                 self._fallback_kill(pid)
-                
+
         except Exception as e:
             logger.error(f"Failed to kill process tree {pid}: {e}")
 
@@ -331,7 +341,6 @@ class ProcessController:
         try:
             if sys.platform == "win32":
                 # Windows: use taskkill
-                import subprocess
                 subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", str(pid)],
                     capture_output=True,
@@ -339,11 +348,10 @@ class ProcessController:
                 )
             else:
                 # Unix: use kill with process group
-                import os
                 try:
                     os.killpg(os.getpgid(pid), signal.SIGKILL)
                 except ProcessLookupError:
                     pass  # Process already dead
-                    
+
         except Exception as e:
             logger.warning(f"Fallback kill failed for PID {pid}: {e}")
