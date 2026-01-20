@@ -294,7 +294,7 @@ def get_payload_recommendations(
     return payloads
 
 
-def diagnose_error(error_output: str) -> tuple[str, list[str]]:
+def diagnose_error(error_output: str) -> tuple[str, list]:
     """
     Diagnose Metasploit error and provide fixes.
 
