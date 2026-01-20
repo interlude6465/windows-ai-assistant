@@ -25,6 +25,7 @@ from spectral.conversation_context import ConversationContext
 from spectral.execution_models import ExecutionMode
 from spectral.execution_router import ExecutionRouter
 from spectral.intent_classifier import IntentClassifier
+from spectral.knowledge.metasploit_guide import METASPLOIT_KNOWLEDGE
 from spectral.llm_client import LLMClient
 from spectral.memory_models import ExecutionMemory
 from spectral.memory_reference_resolver import ReferenceResolver
@@ -491,19 +492,20 @@ class ChatSession:
 
     def _handle_metasploit_request(self, user_input: str) -> str:
         """
-        Handle Metasploit-related requests with specialized system prompt.
+        Handle Metasploit-related requests with specialized system prompt and real
+        command execution.
 
         Args:
             user_input: User's natural language input
 
         Returns:
-            Response from specialized Metasploit handler
+            Response from specialized Metasploit handler with actual command execution
         """
-        logger.info("Metasploit request detected, using specialized handler")
+        logger.info("Metasploit request detected, using specialized handler with execution")
 
         # Add Metasploit knowledge context to response
         try:
-            # Use the specialized Metasploit system prompt
+            # Use the specialized Metasploit system prompt to get guidance
             if hasattr(self, "llm_client") and self.llm_client:
                 # Prepare messages with Metasploit system prompt
                 messages = [
@@ -512,7 +514,10 @@ class ChatSession:
                 ]
 
                 # Get response from LLM
-                response = self.llm_client.chat(messages)
+                ai_response = self.llm_client.chat(messages)
+
+                # Now execute actual Metasploit commands via executor
+                executor_response = self._execute_metasploit_commands(user_input, ai_response)
 
                 # Add to history
                 context = self.get_context_summary()
@@ -522,10 +527,19 @@ class ChatSession:
                     metadata={"context": context, "intent": "metasploit", "metasploit": True},
                 )
                 self.add_message(
-                    "assistant", response, metadata={"intent": "metasploit", "metasploit": True}
+                    "assistant",
+                    executor_response,
+                    metadata={"intent": "metasploit", "metasploit": True},
                 )
 
-                return response
+                # Save conversation to memory
+                self._save_to_memory(
+                    user_message=user_input,
+                    assistant_response=executor_response,
+                    execution_history=[],
+                )
+
+                return executor_response
             else:
                 # Fallback to basic response
                 fallback_response = (
@@ -550,6 +564,13 @@ class ChatSession:
                     metadata={"intent": "metasploit", "metasploit": True},
                 )
 
+                # Save conversation to memory
+                self._save_to_memory(
+                    user_message=user_input,
+                    assistant_response=fallback_response,
+                    execution_history=[],
+                )
+
                 return fallback_response
 
         except Exception as e:
@@ -557,6 +578,30 @@ class ChatSession:
             error_msg = f"Error processing Metasploit request: {str(e)}"
             self.add_message("assistant", error_msg, metadata={"error": str(e)})
             return error_msg
+
+    def _execute_metasploit_commands(self, user_message: str, ai_response: str) -> str:
+        """Execute actual Metasploit commands via the executor.
+
+        Args:
+            user_message: Original user request
+            ai_response: LLM response with Metasploit guidance
+
+        Returns:
+            Formatted response with actual command execution results
+        """
+        # Try to use dual_execution_orchestrator's direct_executor
+        if self.dual_execution_orchestrator and hasattr(
+            self.dual_execution_orchestrator, "direct_executor"
+        ):
+            executor = self.dual_execution_orchestrator.direct_executor
+            return executor.execute_metasploit_request(
+                user_message=user_message,
+                ai_response=ai_response,
+                knowledge_base=METASPLOIT_KNOWLEDGE,
+            )
+
+        # Fallback: just return the AI response without execution
+        return str(ai_response)
 
     def _generate_conversational_response(
         self, user_input: str, execution_result: Optional[Dict[str, Any]]
