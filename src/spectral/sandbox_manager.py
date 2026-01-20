@@ -10,18 +10,52 @@ import logging
 import shutil
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from spectral.process_controller import ProcessController, ProcessResult
 
 logger = logging.getLogger(__name__)
 
 
+class SandboxState(str, Enum):
+    """Enum for sandbox states."""
+
+    IDLE = "idle"
+    GENERATING = "generating"
+    TESTING = "testing"
+    PASSED = "passed"
+    FAILED = "failed"
+    CLEANED = "cleaned"
+
+
+class Sandbox:
+    """Represents an isolated sandbox for code execution."""
+
+    def __init__(self, sandbox_id: str, path: Path):
+        self.sandbox_id = sandbox_id
+        self.path = path
+        self.state = SandboxState.IDLE
+        self.files: List[str] = []
+
+    def update_state(self, state: SandboxState) -> None:
+        """Update sandbox state."""
+        self.state = state
+        logger.info(f"Sandbox {self.sandbox_id} state updated to {state}")
+
+    def add_file(self, filename: str) -> None:
+        """Track a file added to the sandbox."""
+        if filename not in self.files:
+            self.files.append(filename)
+
+
 @dataclass
 class SandboxResult:
     """Result of sandbox execution with verification gates."""
+
     run_id: str
     status: Literal["success", "syntax_error", "test_failure", "timeout", "error"]
     code_path: Path
@@ -67,14 +101,29 @@ class SandboxRunManager:
             run_id = str(uuid.uuid4())
 
         run_path = self.get_run_path(run_id)
-        
+
         # Create directory structure
         (run_path / "code").mkdir(parents=True, exist_ok=True)
         (run_path / "tests").mkdir(parents=True, exist_ok=True)
         (run_path / "logs").mkdir(parents=True, exist_ok=True)
-        
+
         logger.info(f"Created sandbox run: {run_id} at {run_path}")
         return run_id
+
+    def create_sandbox(self, run_id: Optional[str] = None) -> Sandbox:
+        """
+        Create a new sandbox and return a Sandbox object.
+        For backward compatibility with SandboxExecutionSystem.
+        """
+        sid = self.create_run(run_id)
+        return Sandbox(sid, self.get_run_path(sid))
+
+    def cleanup_sandbox(self, sandbox_id: str) -> None:
+        """
+        Clean up a sandbox by ID.
+        For backward compatibility with SandboxExecutionSystem.
+        """
+        self.cleanup_run(sandbox_id)
 
     def get_run_path(self, run_id: str) -> Path:
         """
@@ -102,7 +151,7 @@ class SandboxRunManager:
         """
         code_dir = self.get_run_path(run_id) / "code"
         file_path = code_dir / filename
-        
+
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(code)
@@ -126,7 +175,7 @@ class SandboxRunManager:
         """
         test_dir = self.get_run_path(run_id) / "tests"
         file_path = test_dir / filename
-        
+
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(test_code)
@@ -148,9 +197,9 @@ class SandboxRunManager:
             Tuple of (syntax_valid, error_message)
         """
         logger.info(f"Running syntax check on {code_file}")
-        
+
         log_file = self.get_run_path(run_id) / "logs" / "syntax_check.log"
-        
+
         try:
             result = self.process_controller.run_subprocess(
                 cmd=["python", "-m", "py_compile", str(code_file)],
@@ -158,15 +207,17 @@ class SandboxRunManager:
                 timeout=5,
                 log_file=log_file,
             )
-            
+
             if result.exit_code == 0:
                 logger.info("Syntax check passed")
                 return True, None
             else:
-                error_msg = f"Syntax Error: {result.stderr.strip()}"
+                # Capture stderr or stdout (py_compile often uses stdout for some errors)
+                raw_error = result.stderr.strip() or result.stdout.strip()
+                error_msg = f"Syntax Error: {raw_error}"
                 logger.warning(f"Syntax check failed: {error_msg}")
                 return False, error_msg
-                
+
         except Exception as e:
             error_msg = f"Syntax check error: {str(e)}"
             logger.error(error_msg)
@@ -184,9 +235,9 @@ class SandboxRunManager:
             Tuple of (tests_passed, pytest_output)
         """
         logger.info(f"Running tests in {test_dir}")
-        
+
         log_file = self.get_run_path(run_id) / "logs" / "pytest.log"
-        
+
         try:
             result = self.process_controller.run_subprocess(
                 cmd=["pytest", "-v", "--tb=short", str(test_dir)],
@@ -194,28 +245,24 @@ class SandboxRunManager:
                 timeout=30,
                 log_file=log_file,
             )
-            
+
             # Parse pytest output for summary
             summary = self._parse_pytest_output(result.stdout, result.stderr)
-            
+
             if result.exit_code == 0:
                 logger.info("Tests passed")
             else:
                 logger.warning(f"Tests failed with exit code {result.exit_code}")
-            
+
             return result.exit_code == 0, summary
-            
+
         except Exception as e:
             error_msg = f"Test execution error: {str(e)}"
             logger.error(error_msg)
             return False, error_msg
 
     def run_smoke_test(
-        self, 
-        run_id: str, 
-        code_file: Path, 
-        timeout: int = 5,
-        stdin_data: Optional[str] = None
+        self, run_id: str, code_file: Path, timeout: int = 5, stdin_data: Optional[str] = None
     ) -> ProcessResult:
         """
         Gate 3: Run smoke test (CLI only, skip for GUI).
@@ -230,9 +277,9 @@ class SandboxRunManager:
             ProcessResult from execution
         """
         logger.info(f"Running smoke test on {code_file}")
-        
+
         log_file = self.get_run_path(run_id) / "logs" / "smoke_test.log"
-        
+
         try:
             if stdin_data:
                 result = self.process_controller.run_with_stdin(
@@ -248,10 +295,10 @@ class SandboxRunManager:
                     timeout=timeout,
                     log_file=log_file,
                 )
-            
+
             logger.info(f"Smoke test completed with exit code {result.exit_code}")
             return result
-            
+
         except Exception as e:
             logger.error(f"Smoke test error: {str(e)}")
             # Return a failed result
@@ -284,12 +331,12 @@ class SandboxRunManager:
             "CTk.mainloop()",
             "app.run()",  # Some GUI frameworks use run()
         ]
-        
+
         for pattern in mainloop_patterns:
             if pattern in code:
                 logger.warning(f"Detected GUI mainloop pattern: {pattern}")
                 return True
-        
+
         return False
 
     def is_gui_program(self, code: str) -> bool:
@@ -315,12 +362,12 @@ class SandboxRunManager:
             "kivy",
             "wx",
         ]
-        
+
         code_lower = code.lower()
         for pattern in gui_patterns:
             if pattern.lower() in code_lower:
                 return True
-        
+
         return False
 
     def _parse_pytest_output(self, stdout: str, stderr: str) -> str:
@@ -335,18 +382,19 @@ class SandboxRunManager:
             Summary string
         """
         full_output = stdout + stderr
-        
+
         # Extract key information
         lines = full_output.splitlines()
         summary_lines = []
-        
+
         for line in lines:
             line = line.strip()
-            if any(keyword in line for keyword in [
-                "FAILED", "ERROR", "PASSED", "collected", "test session", "::"
-            ]):
+            if any(
+                keyword in line
+                for keyword in ["FAILED", "ERROR", "PASSED", "collected", "test session", "::"]
+            ):
                 summary_lines.append(line)
-        
+
         if summary_lines:
             return "\n".join(summary_lines)
         else:
@@ -374,28 +422,28 @@ class SandboxRunManager:
             SandboxResult with verification results
         """
         start_time = time.time()
-        
+
         logger.info(f"Starting verification pipeline for run {run_id}")
-        
+
         # Initialize result
         gates_passed = {
             "syntax": False,
             "tests": False,
             "smoke": False,
         }
-        
-        test_paths = []
+
+        test_paths: List[Path] = []
         error_message = None
         pytest_summary = None
-        
+
         try:
             # Gate 0: Write code to sandbox
             code_path = self.write_code(run_id, filename, code)
-            
+
             # Gate 1: Syntax check
             syntax_ok, syntax_error = self.check_syntax(run_id, code_path)
             gates_passed["syntax"] = syntax_ok
-            
+
             if not syntax_ok:
                 return SandboxResult(
                     run_id=run_id,
@@ -410,41 +458,22 @@ class SandboxRunManager:
                     gates_passed=gates_passed,
                     duration_seconds=time.time() - start_time,
                 )
-            
+
             # Auto-detect GUI if not specified
             if is_gui is None:
                 is_gui = self.is_gui_program(code)
-            
-            # Gate 2: Test gate (generate and run tests)
-            if not is_gui:
-                # For non-GUI programs, generate basic tests
-                test_code = self._generate_basic_test(code, filename)
-                test_filename = f"test_{Path(filename).stem}.py"
-                test_path = self.write_test(run_id, test_filename, test_code)
-                test_paths.append(test_path)
-                
-                tests_ok, pytest_summary = self.run_tests(run_id, test_path.parent)
-                gates_passed["tests"] = tests_ok
-                
-                if not tests_ok:
-                    return SandboxResult(
-                        run_id=run_id,
-                        status="test_failure",
-                        code_path=code_path,
-                        test_paths=test_paths,
-                        log_stdout="",
-                        log_stderr=pytest_summary or "",
-                        exit_code=-1,
-                        pytest_summary=pytest_summary,
-                        error_message=f"Tests failed: {pytest_summary}",
-                        gates_passed=gates_passed,
-                        duration_seconds=time.time() - start_time,
-                    )
-            else:
-                # For GUI programs, skip test gate or use simple import test
+
+            # Gate 2: Test gate
+            if is_gui:
+                # For GUI programs, skip test gate
                 logger.info("GUI program detected, skipping test gate")
-                gates_passed["tests"] = True  # Skip for GUI
-            
+                gates_passed["tests"] = True
+            else:
+                # For non-GUI programs: SKIP pytest entirely, go straight to execution
+                # No test gate - just syntax + run (removed pytest gate to fix WinError 2)
+                logger.info("Non-GUI program detected, skipping pytest tests")
+                gates_passed["tests"] = True  # Skip for non-GUI
+
             # Gate 3: Smoke test
             if not is_gui:
                 # Check for mainloop calls
@@ -464,11 +493,11 @@ class SandboxRunManager:
                         gates_passed=gates_passed,
                         duration_seconds=time.time() - start_time,
                     )
-                
+
                 # Run smoke test
                 smoke_result = self.run_smoke_test(run_id, code_path, stdin_data=stdin_data)
                 gates_passed["smoke"] = smoke_result.exit_code == 0
-                
+
                 if smoke_result.exit_code != 0:
                     error_message = f"Smoke test failed: {smoke_result.stderr}"
                     return SandboxResult(
@@ -490,11 +519,11 @@ class SandboxRunManager:
                 # This would need to be enhanced to actually test GUI code properly
                 # For now, we just mark it as passed
                 gates_passed["smoke"] = True
-            
+
             # All gates passed
             duration = time.time() - start_time
             logger.info(f"Verification pipeline completed successfully in {duration:.2f}s")
-            
+
             return SandboxResult(
                 run_id=run_id,
                 status="success",
@@ -508,12 +537,12 @@ class SandboxRunManager:
                 gates_passed=gates_passed,
                 duration_seconds=duration,
             )
-            
+
         except Exception as e:
             duration = time.time() - start_time
             error_message = f"Pipeline error: {str(e)}"
             logger.error(f"Verification pipeline failed: {e}")
-            
+
             return SandboxResult(
                 run_id=run_id,
                 status="error",
@@ -536,7 +565,7 @@ class SandboxRunManager:
             run_id: Run ID to clean up
         """
         run_path = self.get_run_path(run_id)
-        
+
         try:
             if run_path.exists():
                 shutil.rmtree(run_path)
@@ -561,15 +590,43 @@ class SandboxRunManager:
             "exit_code": result.exit_code,
             "pytest_summary": result.pytest_summary,
         }
-        
+
         metadata_file = self.get_run_path(run_id) / "logs" / "run_metadata.json"
-        
+
         try:
             with open(metadata_file, "w", encoding="utf-8") as f:
                 json.dump(metadata, f, indent=2)
             logger.debug(f"Saved run metadata: {metadata_file}")
         except Exception as e:
             logger.warning(f"Failed to save run metadata: {e}")
+
+    def save_execution_metadata(self, metadata: Dict[str, Any]) -> None:
+        """
+        Save comprehensive execution metadata to ~/.spectral/execution_metadata/
+
+        Args:
+            metadata: Metadata dictionary to save
+        """
+        run_id = metadata.get("run_id")
+        if not run_id:
+            logger.warning("No run_id provided in metadata, cannot save")
+            return
+
+        metadata_dir = Path.home() / ".spectral" / "execution_metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+
+        metadata_file = metadata_dir / f"{run_id}.json"
+
+        # Ensure timestamp is present
+        if "timestamp" not in metadata:
+            metadata["timestamp"] = datetime.now().isoformat()
+
+        try:
+            with open(metadata_file, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2)
+            logger.info(f"Saved execution metadata to {metadata_file}")
+        except Exception as e:
+            logger.warning(f"Failed to save execution metadata: {e}")
 
     def _generate_basic_test(self, code: str, filename: str) -> str:
         """
@@ -583,7 +640,7 @@ class SandboxRunManager:
             Basic test code
         """
         program_name = Path(filename).stem
-        
+
         return f'''import pytest
 
 def test_import_{program_name}():

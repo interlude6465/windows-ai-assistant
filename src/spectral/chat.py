@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -24,12 +25,14 @@ from spectral.conversation_context import ConversationContext
 from spectral.execution_models import ExecutionMode
 from spectral.execution_router import ExecutionRouter
 from spectral.intent_classifier import IntentClassifier
+from spectral.knowledge.metasploit_guide import METASPLOIT_KNOWLEDGE
 from spectral.llm_client import LLMClient
 from spectral.memory_models import ExecutionMemory
 from spectral.memory_reference_resolver import ReferenceResolver
 from spectral.memory_search import MemorySearch
 from spectral.orchestrator import Orchestrator
 from spectral.persistent_memory import MemoryModule
+from spectral.prompts import METASPLOIT_SYSTEM_PROMPT
 from spectral.reasoning import Plan, ReasoningModule
 from spectral.research_intent_handler import ResearchIntentHandler
 from spectral.response_generator import ResponseGenerator
@@ -151,12 +154,11 @@ class ChatSession:
             )
 
         # Initialize memory search and reference resolver if memory module is available
+        self.memory_search: Optional[MemorySearch] = None
+        self.reference_resolver: Optional[ReferenceResolver] = None
         if memory_module:
             self.memory_search = MemorySearch()
             self.reference_resolver = ReferenceResolver()
-        else:
-            self.memory_search = None
-            self.reference_resolver = None
 
         # Initialize research handler and execution router
         self.research_handler = ResearchIntentHandler(config=config)
@@ -335,19 +337,23 @@ class ChatSession:
             return
 
         try:
-            # Extract context tags from the conversation
+            # Extract context tags and execution run IDs from the conversation
             context_tags = []
+            execution_run_ids = []
             if execution_history:
                 for exec_mem in execution_history:
                     context_tags.extend(exec_mem.tags)
+                    if hasattr(exec_mem, "execution_id"):
+                        execution_run_ids.append(exec_mem.execution_id)
 
             self.memory_module.save_conversation_turn(
                 user_message=user_message,
                 assistant_response=assistant_response,
                 execution_history=execution_history or [],
                 context_tags=context_tags,
+                execution_run_ids=execution_run_ids,
             )
-            logger.info("Saved conversation turn to memory")
+            logger.info("Saved conversation turn to memory with execution links")
         except Exception as e:
             logger.error(f"Failed to save conversation to memory: {e}")
 
@@ -441,6 +447,162 @@ class ChatSession:
 
         return "\n".join(lines) if lines else "No result information available."
 
+    def _is_metasploit_request(self, user_input: str) -> bool:
+        """
+        Detect if user request is related to Metasploit/penetration testing.
+
+        Args:
+            user_input: User's natural language input
+
+        Returns:
+            True if this is a Metasploit-related request
+        """
+        metasploit_keywords = [
+            "metasploit",
+            "msfconsole",
+            "msfvenom",
+            "payload",
+            "exploit",
+            "penetration test",
+            "pentest",
+            "reverse shell",
+            "meterpreter",
+            "create a payload",
+            "generate payload",
+            "hack",
+            "pen testing",
+            "exploit target",
+            "get shell",
+            "backdoor",
+            "ms17-010",
+            "eternalblue",
+            "privilege escalation",
+            "priv esc",
+            "cve-",
+            "vulnerability scan",
+            "msf>",
+            "search exploit",
+            "use exploit",
+            "handler",
+            "listener",
+        ]
+
+        input_lower = user_input.lower()
+        return any(keyword in input_lower for keyword in metasploit_keywords)
+
+    def _handle_metasploit_request(self, user_input: str) -> str:
+        """
+        Handle Metasploit-related requests with specialized system prompt and real
+        command execution.
+
+        Args:
+            user_input: User's natural language input
+
+        Returns:
+            Response from specialized Metasploit handler with actual command execution
+        """
+        logger.info("Metasploit request detected, using specialized handler with execution")
+
+        # Add Metasploit knowledge context to response
+        try:
+            # Use the specialized Metasploit system prompt to get guidance
+            if hasattr(self, "llm_client") and self.llm_client:
+                # Prepare messages with Metasploit system prompt
+                messages = [
+                    {"role": "system", "content": METASPLOIT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_input},
+                ]
+
+                # Get response from LLM
+                ai_response = self.llm_client.chat(messages)
+
+                # Now execute actual Metasploit commands via executor
+                executor_response = self._execute_metasploit_commands(user_input, ai_response)
+
+                # Add to history
+                context = self.get_context_summary()
+                self.add_message(
+                    "user",
+                    user_input,
+                    metadata={"context": context, "intent": "metasploit", "metasploit": True},
+                )
+                self.add_message(
+                    "assistant",
+                    executor_response,
+                    metadata={"intent": "metasploit", "metasploit": True},
+                )
+
+                # Save conversation to memory
+                self._save_to_memory(
+                    user_message=user_input,
+                    assistant_response=executor_response,
+                    execution_history=[],
+                )
+
+                return executor_response
+            else:
+                # Fallback to basic response
+                fallback_response = (
+                    "I can help you with Metasploit penetration testing! "
+                    "I can guide you through:\n"
+                    "• Creating payloads for Windows and Linux\n"
+                    "• Finding and configuring exploits\n"
+                    "• Setting up listeners and handlers\n"
+                    "• Post-exploitation activities\n"
+                    "• Troubleshooting common issues\n\n"
+                    "Please tell me what you'd like to do. For example: "
+                    "'create a payload for my Windows 10 computer' or "
+                    "'help me exploit a target running Windows 7'."
+                )
+
+                self.add_message(
+                    "user", user_input, metadata={"intent": "metasploit", "metasploit": True}
+                )
+                self.add_message(
+                    "assistant",
+                    fallback_response,
+                    metadata={"intent": "metasploit", "metasploit": True},
+                )
+
+                # Save conversation to memory
+                self._save_to_memory(
+                    user_message=user_input,
+                    assistant_response=fallback_response,
+                    execution_history=[],
+                )
+
+                return fallback_response
+
+        except Exception as e:
+            logger.error(f"Error in Metasploit handler: {e}")
+            error_msg = f"Error processing Metasploit request: {str(e)}"
+            self.add_message("assistant", error_msg, metadata={"error": str(e)})
+            return error_msg
+
+    def _execute_metasploit_commands(self, user_message: str, ai_response: str) -> str:
+        """Execute actual Metasploit commands via the executor.
+
+        Args:
+            user_message: Original user request
+            ai_response: LLM response with Metasploit guidance
+
+        Returns:
+            Formatted response with actual command execution results
+        """
+        # Try to use dual_execution_orchestrator's direct_executor
+        if self.dual_execution_orchestrator and hasattr(
+            self.dual_execution_orchestrator, "direct_executor"
+        ):
+            executor = self.dual_execution_orchestrator.direct_executor
+            return executor.execute_metasploit_request(
+                user_message=user_message,
+                ai_response=ai_response,
+                knowledge_base=METASPLOIT_KNOWLEDGE,
+            )
+
+        # Fallback: just return the AI response without execution
+        return str(ai_response)
+
     def _generate_conversational_response(
         self, user_input: str, execution_result: Optional[Dict[str, Any]]
     ) -> str:
@@ -529,6 +691,10 @@ class ChatSession:
             Formatted response string
         """
         logger.info(f"Processing user input in chat: {user_input}")
+
+        # Check for Metasploit requests first (specialized handling)
+        if self._is_metasploit_request(user_input):
+            return self._handle_metasploit_request(user_input)
 
         # Check intent first - handle casual conversation immediately
         intent = self.intent_classifier.classify_intent(user_input)
@@ -727,6 +893,35 @@ class ChatSession:
 
         """
         logger.info(f"Processing user input with streaming: {user_input}")
+
+        # Check if this is a simple program request
+        simple_program_patterns = [
+            r"hello\s+world",
+            r"simple\s+program",
+            r"basic\s+script",
+            r"quick\s+test",
+            r"script\s+to\s+add\s+two\s+numbers",
+        ]
+
+        is_simple_program = any(
+            re.search(pattern, user_input, re.IGNORECASE) for pattern in simple_program_patterns
+        )
+
+        if is_simple_program and self.dual_execution_orchestrator:
+            logger.info(f"Handling as simple program request: {user_input}")
+            yield "📝 Generating and executing simple program...\n\n"
+
+            try:
+                for chunk in self.dual_execution_orchestrator.process_request(
+                    user_input, max_attempts=5
+                ):
+                    if self.is_cancel_requested():
+                        return
+                    yield chunk
+                return
+            except Exception as e:
+                logger.warning(f"Failed to execute as simple program: {e}")
+                # Fall through to regular processing
 
         # Try simple task executor first for immediate results
         simple_executor = SimpleTaskExecutor()

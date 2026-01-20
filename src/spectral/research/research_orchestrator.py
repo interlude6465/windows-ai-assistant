@@ -71,8 +71,7 @@ class ResearchOrchestrator:
         conn = sqlite3.connect(str(self.cache_db_path))
         cursor = conn.cursor()
 
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS web_cache (
                 url TEXT PRIMARY KEY,
                 final_url TEXT NOT NULL,
@@ -87,11 +86,9 @@ class ResearchOrchestrator:
                 last_modified TEXT,
                 expires_at TIMESTAMP
             )
-        """
-        )
+        """)
 
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS search_cache (
                 query TEXT PRIMARY KEY,
                 provider TEXT NOT NULL,
@@ -99,11 +96,9 @@ class ResearchOrchestrator:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 expires_at TIMESTAMP
             )
-        """
-        )
+        """)
 
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS knowledge_packs (
                 id TEXT PRIMARY KEY,
                 query TEXT NOT NULL,
@@ -116,8 +111,7 @@ class ResearchOrchestrator:
                 expires_at TIMESTAMP,
                 validation_count INTEGER DEFAULT 0
             )
-        """
-        )
+        """)
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_web_cache_expires ON web_cache(expires_at)")
         cursor.execute(

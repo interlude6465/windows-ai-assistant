@@ -17,8 +17,9 @@ from spectral.execution_router import ExecutionRouter
 from spectral.llm_client import LLMClient
 from spectral.mistake_learner import MistakeLearner
 from spectral.persistent_memory import MemoryModule
+from spectral.research_intent_handler import ResearchIntentHandler
 from spectral.retry_parsing import format_attempt_progress, parse_retry_limit
-from spectral.utils import clean_code
+from spectral.utils import AUTONOMOUS_CODE_REQUIREMENT, SmartInputHandler, clean_code
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class DualExecutionOrchestrator:
         self.execution_monitor = ExecutionMonitor()
         self.execution_monitor.set_gui_callback(gui_callback)
         self.adaptive_fix_engine = AdaptiveFixEngine(llm_client, self.mistake_learner)
+        self.research_handler = ResearchIntentHandler()
         logger.info("DualExecutionOrchestrator initialized")
 
     def process_request(
@@ -83,7 +85,13 @@ class DualExecutionOrchestrator:
         # Route to appropriate execution mode
         mode, confidence = self.router.classify(user_input)
 
-        if mode == ExecutionMode.DIRECT and confidence >= 0.6:
+        if mode == ExecutionMode.RESEARCH:
+            logger.info("Using RESEARCH mode")
+            yield from self._execute_research_mode(user_input)
+        elif mode == ExecutionMode.RESEARCH_AND_ACT:
+            logger.info("Using RESEARCH_AND_ACT mode")
+            yield from self._execute_research_and_act_mode(user_input, max_attempts=max_attempts)
+        elif mode == ExecutionMode.DIRECT and confidence >= 0.6:
             logger.info("Using DIRECT execution mode")
             yield from self._execute_direct_mode(user_input, max_attempts=max_attempts)
         else:
@@ -97,6 +105,13 @@ class DualExecutionOrchestrator:
 
         logger.info("Executing in DIRECT mode")
 
+        # Check if research is needed for this request
+        needs_research, tool_name = self.router.should_research(user_input)
+        if needs_research:
+            logger.info(f"Research needed for '{tool_name}', routing to RESEARCH_AND_ACT mode")
+            yield from self._execute_research_and_act_mode(user_input, max_attempts=max_attempts)
+            return
+
         try:
             for output in self.direct_executor.execute_request(
                 user_input, max_attempts=max_attempts
@@ -105,6 +120,72 @@ class DualExecutionOrchestrator:
         except Exception as e:
             logger.error(f"DIRECT mode execution failed: {e}")
             yield f"\n❌ Error: {str(e)}\n"
+
+    def _execute_research_mode(self, user_input: str) -> Generator[str, None, None]:
+        """Execute in RESEARCH mode (information gathering)."""
+        logger.info(f"Executing in RESEARCH mode: {user_input}")
+        yield f"🔍 Researching: {user_input}...\n"
+
+        try:
+            research_response, _ = self.research_handler.handle_research_query(user_input)
+            yield f"\n{research_response}\n"
+        except Exception as e:
+            logger.error(f"RESEARCH mode failed: {e}")
+            yield f"\n❌ Research failed: {str(e)}\n"
+
+    def _execute_research_and_act_mode(
+        self, user_input: str, max_attempts: Optional[int] = None
+    ) -> Generator[str, None, None]:
+        """Execute in RESEARCH_AND_ACT mode (research then execute)."""
+        logger.info(f"Executing in RESEARCH_AND_ACT mode: {user_input}")
+        yield f"🔍 Step 1: Researching {user_input}...\n"
+
+        try:
+            research_response, pack = self.research_handler.handle_research_query(user_input)
+            yield "   ✓ Research complete\n\n"
+
+            yield "🚀 Step 2: Executing based on research findings...\n"
+
+            # Extract research context for code generation
+            research_context = ""
+            if pack:
+                if pack.commands:
+                    research_context += "\nCommands from research:\n"
+                    for cmd in pack.commands[:5]:
+                        cmd_text = cmd.get("command_text", "")
+                        desc = cmd.get("description", "")
+                        if cmd_text:
+                            research_context += f"- {cmd_text}"
+                            if desc:
+                                research_context += f" ({desc})"
+                            research_context += "\n"
+
+                if pack.steps:
+                    research_context += "\nSteps from research:\n"
+                    for step in pack.steps[:5]:
+                        title = step.get("title", "")
+                        if title:
+                            research_context += f"- {title}\n"
+
+            # Inject research into prompt with code generation instructions
+            augmented_input = f"""User Request: {user_input}
+
+Research Context:
+{research_context}
+
+Based on the research above, generate and execute Python code that accomplishes the user's goal.
+Use the actual commands/syntax from the research. Include necessary imports and error handling.
+Save any generated files to the Desktop."""
+            # Route based on complexity
+            mode, confidence = self.router.classify(user_input)
+            if mode == ExecutionMode.PLANNING or len(user_input.split()) > 10:
+                yield from self._execute_planning_mode(augmented_input, max_attempts=max_attempts)
+            else:
+                yield from self._execute_direct_mode(augmented_input, max_attempts=max_attempts)
+
+        except Exception as e:
+            logger.error(f"RESEARCH_AND_ACT mode failed: {e}")
+            yield f"\n❌ Research and Act failed: {str(e)}\n"
 
     def _execute_planning_mode(
         self, user_input: str, max_attempts: Optional[int]
@@ -143,6 +224,13 @@ class DualExecutionOrchestrator:
                     yield "   Generating code...\n"
                     step.code = self._generate_step_code(step, user_input)
                     yield "   ✓ Code generated\n"
+
+                # Apply Smart Input Detection & Injection
+                input_handler = SmartInputHandler()
+                step.code, test_inputs = input_handler.detect_and_inject_inputs(step.code)
+                if test_inputs:
+                    yield f"   🧠 Smart Input: Auto-injecting {len(test_inputs)} values\n"
+                    step.code = input_handler.inject_test_inputs(step.code, test_inputs)
 
                 attempt = 1
                 while True:
@@ -257,23 +345,45 @@ class DualExecutionOrchestrator:
         Returns:
             Generated code
         """
-        prompt = f"""Write Python code to accomplish this step:
+        import getpass
 
-Step Description: {step.description}
+        username = getpass.getuser()
+
+        prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
+
+Task: Write Python code to accomplish this step:
+{step.description}
 
 Original Request: {user_input}
 
-Requirements:
+Remember:
+- Hard-code all input values
+- No input() calls
+- Code must run autonomously
+- Produce output immediately
+
+IMPORTANT: You are running on Windows. Always use Windows paths:
+- Home directory: C:\\Users\\{username}
+- Desktop: C:\\Users\\{username}\\Desktop
+- Temp: C:\\Users\\{username}\\AppData\\Local\\Temp
+
+NEVER use:
+- /path/to/... (Unix paths)
+- /usr/bin, /home, /var (Unix directories)
+- Relative paths like './data' (use full Windows paths)
+
+For file operations, use:
+- os.path.expanduser('~') for home directory
+- os.path.join() for path construction
+- Always use backslashes or raw strings: r'C:\\path\\to\\file'
+
+General Requirements:
 - Write complete, executable code
 - Include proper error handling
 - Add comments explaining the code
 - Make it production-ready
 - No extra text or explanations, just the code
-- IMPORTANT: For interactive programs, use input() and print(), NOT Tkinter dialogs
-- AVOID: simpledialog.askstring, simpledialog.askfloat, simpledialog.askinteger, tkinter.filedialog
-- Use CLI-based input() instead: input("Enter value: ")
-
-Return only the code, no markdown formatting, no explanations."""
+- Return only the code, no markdown formatting, no explanations."""
 
         try:
             raw_code = self.llm_client.generate(prompt)

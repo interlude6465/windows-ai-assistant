@@ -37,8 +37,7 @@ class SQLiteBackend(StorageBackend):
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
                     category TEXT NOT NULL,
@@ -51,26 +50,19 @@ class SQLiteBackend(StorageBackend):
                     provenance TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )
-                """
-            )
+                """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_category ON memories(category)
-                """
-            )
+                """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_entity ON memories(entity_type, entity_id)
-                """
-            )
+                """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tags ON memories(tags)
-                """
-            )
+                """)
 
             conn.commit()
             logger.debug(f"SQLite database initialized: {self.db_path}")

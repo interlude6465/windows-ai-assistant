@@ -9,7 +9,7 @@ import logging
 import re
 import subprocess
 import sys
-from typing import Generator, List, Optional, Tuple
+from typing import Any, Callable, Generator, List, Optional, Tuple
 
 from spectral.execution_models import CodeStep
 from spectral.utils import clean_code, detect_input_calls, generate_test_inputs
@@ -51,10 +51,10 @@ class ExecutionMonitor:
 
     def __init__(self) -> None:
         """Initialize the execution monitor."""
-        self.gui_callback = None
+        self.gui_callback: Optional[Callable[..., Any]] = None
         logger.info("ExecutionMonitor initialized")
 
-    def set_gui_callback(self, gui_callback: Optional[callable] = None) -> None:
+    def set_gui_callback(self, gui_callback: Optional[Callable[..., Any]] = None) -> None:
         """
         Set the GUI callback for sandbox viewer updates.
 
@@ -263,11 +263,15 @@ class ExecutionMonitor:
 
         if step.code:
             # Emit code generation event to sandbox viewer
-            self._emit_gui_event("code_generated", {"code": step.code})
+            self._emit_gui_event(
+                "code_generated",
+                {"code": step.code, "step_number": step.step_number, "language": "python"},
+            )
 
             # Execute code (write to temp file and run)
             import os
             import tempfile
+            from datetime import datetime
 
             # Clean markdown formatting from code before writing
             cleaned_code = clean_code(step.code)
@@ -285,6 +289,12 @@ class ExecutionMonitor:
                 temp_file = f.name
 
             try:
+                # Emit execution started event
+                self._emit_gui_event(
+                    "execution_started",
+                    {"step_number": step.step_number, "timestamp": datetime.now().isoformat()},
+                )
+
                 if has_interactive:
                     # Execute with stdin support for interactive programs
                     yield from self._execute_with_input_support(temp_file, timeout, prompts)
@@ -294,9 +304,28 @@ class ExecutionMonitor:
                     for line, source, is_error in self.stream_subprocess_output(
                         command, timeout=timeout
                     ):
-                        # Emit execution line to sandbox viewer
-                        self._emit_gui_event("execution_line", {"line": line})
+                        # Emit execution line to sandbox viewer with proper format
+                        self._emit_gui_event(
+                            "execution_line",
+                            {
+                                "step_number": step.step_number,
+                                "output": line,
+                                "source": source,
+                                "is_error": is_error,
+                                "timestamp": datetime.now().isoformat(),
+                            },
+                        )
                         yield (line, is_error, None)
+
+                # Emit execution completed event
+                self._emit_gui_event(
+                    "execution_completed",
+                    {
+                        "step_number": step.step_number,
+                        "status": "success",
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                )
             finally:
                 # Clean up temp file
                 try:
@@ -332,6 +361,8 @@ class ExecutionMonitor:
         Yields:
             Tuples of (output_line, is_error, error_message_if_any)
         """
+        from datetime import datetime
+
         # Generate test inputs based on prompts
         test_inputs = generate_test_inputs(prompts)
         logger.info(f"Generated test inputs for execution: {test_inputs}")
@@ -355,19 +386,33 @@ class ExecutionMonitor:
 
             # Send all inputs joined with newlines
             input_data = "\n".join(test_inputs) + "\n"
-            process.stdin.write(input_data)
-            process.stdin.flush()
+            if process.stdin:
+                process.stdin.write(input_data)
+                process.stdin.flush()
 
             # Read output in real-time
             while True:
-                line = process.stdout.readline()
+                if process.stdout:
+                    line = process.stdout.readline()
+                else:
+                    line = ""
+
                 if not line and process.poll() is not None:
                     break
 
                 if line:
                     is_error = self._is_error_line(line)
-                    # Emit execution line to sandbox viewer
-                    self._emit_gui_event("execution_line", {"line": line})
+                    # Emit execution line to sandbox viewer with proper format
+                    self._emit_gui_event(
+                        "execution_line",
+                        {
+                            "step_number": 1,  # Default step number for interactive execution
+                            "output": line,
+                            "source": "stdout",
+                            "is_error": is_error,
+                            "timestamp": datetime.now().isoformat(),
+                        },
+                    )
                     yield (line, is_error, None)
                     logger.debug(f"stdout: {line.rstrip()}")
 

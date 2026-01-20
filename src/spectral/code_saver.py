@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class GenerationRecord:
     """Record of a code generation."""
+
     request_id: str
     prompt: str
     attempt_number: int
@@ -35,6 +36,7 @@ class GenerationRecord:
 @dataclass
 class CodeSaveContext:
     """Context for saving code during a generation request."""
+
     request_id: str
     prompt: str
     attempt_number: int
@@ -91,11 +93,16 @@ class CodeSaver:
     def _init_manifest(self) -> None:
         """Initialize MANIFEST.json if it doesn't exist."""
         if not self.manifest_path.exists():
-            self.manifest_path.write_text(json.dumps({
-                "version": "1.0",
-                "created": datetime.now(timezone.utc).isoformat(),
-                "generations": []
-            }, indent=2))
+            self.manifest_path.write_text(
+                json.dumps(
+                    {
+                        "version": "1.0",
+                        "created": datetime.now(timezone.utc).isoformat(),
+                        "generations": [],
+                    },
+                    indent=2,
+                )
+            )
 
     def _get_date_dir(self) -> Path:
         """Get or create today's date directory."""
@@ -108,6 +115,7 @@ class CodeSaver:
         """Generate a unique request ID based on prompt."""
         # Extract key words from prompt
         import re
+
         words = re.findall(r"[a-z0-9]+", prompt.lower())
         meaningful_words = [w for w in words if len(w) > 2][:5]
 
@@ -131,11 +139,7 @@ class CodeSaver:
         next_num = max_num + 1
         return f"{name_part}_{next_num:03d}"
 
-    def create_request(
-        self,
-        prompt: str,
-        request_id: Optional[str] = None
-    ) -> CodeSaveContext:
+    def create_request(self, prompt: str, request_id: Optional[str] = None) -> CodeSaveContext:
         """
         Create a new request folder and return context for saving.
 
@@ -177,7 +181,7 @@ class CodeSaver:
             final_dir=None,
             start_time=time.time(),
             accumulated_code="",
-            lock=threading.Lock()
+            lock=threading.Lock(),
         )
 
         # Write initial metadata with "partial" status
@@ -219,7 +223,7 @@ class CodeSaver:
             final_dir=None,
             start_time=time.time(),
             accumulated_code="",
-            lock=threading.Lock()
+            lock=threading.Lock(),
         )
 
         # Write initial metadata
@@ -250,7 +254,7 @@ class CodeSaver:
                 with open(context.partial_log_file, "a", encoding="utf-8") as f:
                     f.write(f"[{datetime.now(timezone.utc).isoformat()}] CHUNK:\n")
                     f.write(code_chunk)
-                    f.write("\n" + "="*50 + "\n")
+                    f.write("\n" + "=" * 50 + "\n")
             except Exception as e:
                 logger.error(f"Failed to write partial log: {e}")
 
@@ -260,7 +264,7 @@ class CodeSaver:
         final_code: str,
         status: str,
         sandbox_result: Optional[Dict] = None,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
     ) -> Path:
         """
         Save final code and mark attempt as complete.
@@ -284,9 +288,7 @@ class CodeSaver:
             context.code_file.write_text(final_code)
 
             # Write metadata
-            self._write_metadata(
-                context, status, error_message, sandbox_result, duration
-            )
+            self._write_metadata(context, status, error_message, sandbox_result, duration)
 
             # If successful, also save to FINAL/ directory
             if status == "success":
@@ -297,24 +299,27 @@ class CodeSaver:
                 final_code_file.write_text(final_code)
 
                 final_metadata_file = final_dir / "metadata.json"
-                final_metadata_file.write_text(json.dumps({
-                    "request_id": context.request_id,
-                    "prompt": context.prompt,
-                    "successful_attempt": context.attempt_number,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "status": "success",
-                    "sandbox_result": sandbox_result,
-                    "file_path": str(final_code_file),
-                    "code_length": len(final_code),
-                    "duration_seconds": duration
-                }, indent=2))
+                final_metadata_file.write_text(
+                    json.dumps(
+                        {
+                            "request_id": context.request_id,
+                            "prompt": context.prompt,
+                            "successful_attempt": context.attempt_number,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "status": "success",
+                            "sandbox_result": sandbox_result,
+                            "file_path": str(final_code_file),
+                            "code_length": len(final_code),
+                            "duration_seconds": duration,
+                        },
+                        indent=2,
+                    )
+                )
 
                 context.final_dir = final_dir
 
                 # Update MANIFEST.json
-                self.update_manifest(
-                    context, status, sandbox_result, error_message, duration
-                )
+                self.update_manifest(context, status, sandbox_result, error_message, duration)
 
                 logger.info(
                     f"Saved final code for {context.request_id} "
@@ -329,7 +334,7 @@ class CodeSaver:
         status: str,
         error_message: Optional[str],
         sandbox_result: Optional[Dict],
-        duration: Optional[float] = None
+        duration: Optional[float] = None,
     ) -> None:
         """
         Write metadata.json for an attempt.
@@ -375,7 +380,7 @@ class CodeSaver:
         status: str,
         sandbox_result: Optional[Dict],
         error_message: Optional[str],
-        duration: float
+        duration: float,
     ) -> None:
         """
         Update Desktop/spectral/MANIFEST.json with generation record.
@@ -400,7 +405,7 @@ class CodeSaver:
                 "status": status,
                 "file_path": str(context.code_file),
                 "code_length": len(context.accumulated_code),
-                "duration_seconds": duration
+                "duration_seconds": duration,
             }
 
             if error_message:
@@ -441,7 +446,7 @@ class CodeSaver:
                     sandbox_result=gen_data.get("sandbox_result"),
                     file_path=gen_data.get("file_path", ""),
                     code_length=gen_data.get("code_length", 0),
-                    duration_seconds=gen_data.get("duration_seconds", 0)
+                    duration_seconds=gen_data.get("duration_seconds", 0),
                 )
                 records.append(record)
 

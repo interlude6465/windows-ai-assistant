@@ -199,6 +199,7 @@ class SandboxViewer(ctk.CTkFrame):
         if request_id:
             self.current_request_id = request_id
             from datetime import datetime
+
             self.code_editor.set_metadata(request_id, timestamp=datetime.now().strftime("%H:%M:%S"))
 
     def _on_code_chunk_generated(self, data: dict) -> None:
@@ -223,10 +224,9 @@ class SandboxViewer(ctk.CTkFrame):
 
             if file_path:
                 from datetime import datetime
+
                 self.code_editor.set_metadata(
-                    request_id,
-                    timestamp=datetime.now().strftime("%H:%M:%S"),
-                    file_path=file_path
+                    request_id, timestamp=datetime.now().strftime("%H:%M:%S"), file_path=file_path
                 )
 
             line_count = len(code.split("\n"))

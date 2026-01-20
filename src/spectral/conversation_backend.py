@@ -40,8 +40,7 @@ class ConversationBackend:
             cursor = conn.cursor()
 
             # Conversations table
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS conversations (
                     id TEXT PRIMARY KEY,
                     timestamp TEXT NOT NULL,
@@ -52,12 +51,10 @@ class ConversationBackend:
                     session_id TEXT,
                     created_at TEXT NOT NULL
                 )
-                """
-            )
+                """)
 
             # Executions table
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS executions (
                     id TEXT PRIMARY KEY,
                     conversation_id TEXT,
@@ -75,44 +72,33 @@ class ConversationBackend:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (conversation_id) REFERENCES conversations(id)
                 )
-                """
-            )
+                """)
 
             # Indexes for efficient queries
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_conversations_timestamp
                 ON conversations(timestamp DESC)
-                """
-            )
+                """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_conversations_session
                 ON conversations(session_id)
-                """
-            )
+                """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_executions_timestamp
                 ON executions(timestamp DESC)
-                """
-            )
+                """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_executions_conversation
                 ON executions(conversation_id)
-                """
-            )
+                """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_executions_success
                 ON executions(success)
-                """
-            )
+                """)
 
             conn.commit()
             logger.debug("Conversation database schema initialized")
@@ -344,15 +330,15 @@ class ConversationBackend:
             cursor = conn.cursor()
 
             if session_id:
-                cursor.execute(
-                    "SELECT * FROM conversations WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?",
-                    (session_id, limit),
-                )
+                sql = """
+                    SELECT * FROM conversations
+                    WHERE session_id = ?
+                    ORDER BY timestamp DESC LIMIT ?
+                """
+                cursor.execute(sql, (session_id, limit))
             else:
-                cursor.execute(
-                    "SELECT * FROM conversations ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
-                )
+                sql = "SELECT * FROM conversations ORDER BY timestamp DESC LIMIT ?"
+                cursor.execute(sql, (limit,))
 
             rows = cursor.fetchall()
             conversations = []
@@ -416,10 +402,12 @@ class ConversationBackend:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            cursor.execute(
-                "SELECT * FROM executions WHERE description LIKE ? OR user_request LIKE ? ORDER BY timestamp DESC LIMIT ?",
-                (f"%{query}%", f"%{query}%", limit),
-            )
+            sql = """
+                SELECT * FROM executions
+                WHERE description LIKE ? OR user_request LIKE ?
+                ORDER BY timestamp DESC LIMIT ?
+            """
+            cursor.execute(sql, (f"%{query}%", f"%{query}%", limit))
 
             rows = cursor.fetchall()
             return [self._row_to_execution(row) for row in rows]
@@ -441,10 +429,12 @@ class ConversationBackend:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            cursor.execute(
-                "SELECT file_locations FROM executions WHERE description LIKE ? AND success = 1 ORDER BY timestamp DESC",
-                (f"%{description}%",),
-            )
+            sql = """
+                SELECT file_locations FROM executions
+                WHERE description LIKE ? AND success = 1
+                ORDER BY timestamp DESC
+            """
+            cursor.execute(sql, (f"%{description}%",))
 
             rows = cursor.fetchall()
             locations = []
@@ -476,7 +466,7 @@ class ConversationBackend:
             if row["embedding"]:
                 try:
                     embedding = json.loads(row["embedding"].decode("utf-8"))
-                except:
+                except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
                     pass
         except KeyError:
             pass

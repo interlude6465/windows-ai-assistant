@@ -422,7 +422,10 @@ You executed this and got:
 
 Present the result naturally and conversationally. Be brief and helpful.
 Format clearly if it's a list or data. Don't say "let me fetch that" or make promises.
-Just present the result directly in a friendly way."""
+Just present the result directly in a friendly way.
+
+⚠️ CRITICAL: If the user asks for code, generate FULLY AUTONOMOUS code with NO interactive
+input() calls. All values must be hard-coded. No input() calls allowed."""
 
             try:
                 response = self.llm_client.generate(prompt)
@@ -597,6 +600,10 @@ Just present the result directly in a friendly way."""
 {history_section}{context_section}User: "{user_input}"
 
 Respond naturally and conversationally. Be friendly and brief.
+
+⚠️ CRITICAL: If the user asks for code, generate FULLY AUTONOMOUS code with NO interactive
+input() calls. All values must be hard-coded. No input() calls allowed.
+
 Only reference past conversations or context when directly relevant to the current question.
 Never mention that you "remember" unless it's genuinely important to the answer.
 Don't use repetitive preambles like "As I recall" or "Hello again!".

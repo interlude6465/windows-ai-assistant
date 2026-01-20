@@ -6,11 +6,23 @@ based on complexity and intent.
 """
 
 import logging
-from typing import Tuple
+import re
+from typing import Optional, Tuple
 
 from spectral.execution_models import ExecutionMode
 
 logger = logging.getLogger(__name__)
+
+# Common Python stdlib modules that don't need research
+PYTHON_STDLIB = {
+    "os", "sys", "re", "json", "datetime", "time", "math", "random",
+    "collections", "itertools", "functools", "operator", "string",
+    "pathlib", "typing", "enum", "abc", "copy", "io", "logging",
+    "warnings", "threading", "multiprocessing", "subprocess", "socket",
+    "http", "urllib", "email", "html", "xml", "csv", "configparser",
+    "hashlib", "hmac", "secrets", "ssl", "base64", "binascii",
+    "struct", "codecs", "unicodedata", "locale", "gettext",
+}
 
 
 class ExecutionRouter:
@@ -118,6 +130,47 @@ class ExecutionRouter:
 
         logger.info("ExecutionRouter initialized")
 
+    def should_research(self, user_input: str) -> Tuple[bool, Optional[str]]:
+        """
+        Check if user input requires research before code generation.
+
+        Detects patterns like "how to use X" where X is an external tool/library.
+
+        Args:
+            user_input: User's natural language request
+
+        Returns:
+            Tuple of (should_research, tool_name)
+        """
+        input_lower = user_input.lower().strip()
+
+        # Research-needed patterns
+        research_patterns = [
+            r"how to use\s+(\w+)",
+            r"how do i use\s+(\w+)",
+            r"show me how to use\s+(\w+)",
+            r"demonstrate\s+(\w+)",
+            r"example of\s+using\s+(\w+)",
+            r"teach me\s+(\w+)",
+            r"learn\s+(\w+)",
+            r"how can i use\s+(\w+)",
+            r"what's the way to use\s+(\w+)",
+        ]
+
+        for pattern in research_patterns:
+            match = re.search(pattern, input_lower)
+            if match:
+                tool_name = match.group(1)
+
+                # Don't research common Python stdlib modules
+                if tool_name in PYTHON_STDLIB:
+                    continue
+
+                logger.info(f"Research needed for tool: {tool_name}")
+                return True, tool_name
+
+        return False, None
+
     def classify(self, user_input: str) -> Tuple[ExecutionMode, float]:
         """
         Classify user input into execution mode.
@@ -186,15 +239,42 @@ class ExecutionRouter:
                 logger.debug("Short input without strong technical keywords, skipping research")
                 return ExecutionMode.DIRECT, 0.4
 
+        # EARLY EXIT: Exclude creation commands from research
+        creation_keywords = ["write", "create", "build", "generate", "implement", "make", "develop"]
+        if any(input_lower.startswith(kw) for kw in creation_keywords):
+            logger.debug(
+                "Creation command detected, routing to DIRECT/PLANNING instead of RESEARCH"
+            )
+            # Determine between DIRECT and PLANNING
+            direct_keyword_count = sum(1 for word in words if word in self.direct_keywords)
+            planning_keyword_count = sum(1 for word in words if word in self.planning_keywords)
+            if planning_keyword_count > direct_keyword_count or len(words) > 10:
+                return ExecutionMode.PLANNING, 0.8
+            return ExecutionMode.DIRECT, 0.8
+
+        # EARLY EXIT: Exclude meta-prompts from research
+        meta_prompts = ["on purpose", "intentionally", "as an example", "for demonstration"]
+        if any(pattern in input_lower for pattern in meta_prompts):
+            logger.debug("Meta-prompt detected, avoiding research")
+            return ExecutionMode.DIRECT, 0.7
+
         # Count indicators for each mode
         direct_score = 0.0
         planning_score = 0.0
         research_score = 0.0
 
         # Check for research patterns (strong signals)
-        for pattern in self.research_keywords:
+        explicit_research_queries = [
+            "how to",
+            "what is",
+            "find out",
+            "explain",
+            "look up",
+            "how do i",
+        ]
+        for pattern in explicit_research_queries:
             if pattern in input_lower:
-                research_score += 0.8
+                research_score += 1.0
 
         # Questions are usually research
         if input_lower.startswith(("how", "what", "why", "when", "where", "can", "does", "is")):

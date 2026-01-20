@@ -11,7 +11,7 @@ import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from spectral.config import JarvisConfig
 
@@ -80,8 +80,7 @@ class MistakeLearner:
             conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             cursor = conn.cursor()
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS learned_patterns (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     error_type TEXT NOT NULL,
@@ -96,26 +95,19 @@ class MistakeLearner:
                     success_rate REAL DEFAULT 1.0,
                     last_used TEXT
                 )
-            """
-            )
+            """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_error_type ON learned_patterns(error_type)
-            """
-            )
+            """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tags ON learned_patterns(tags)
-            """
-            )
+            """)
 
-            cursor.execute(
-                """
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_timestamp ON learned_patterns(timestamp DESC)
-            """
-            )
+            """)
 
             conn.commit()
             conn.close()
@@ -158,7 +150,7 @@ class MistakeLearner:
                 conn.commit()
 
                 logger.info(f"Stored learning pattern {pattern_id}: {pattern.error_type}")
-                return pattern_id
+                return int(pattern_id) if pattern_id is not None else -1
 
             except Exception as e:
                 logger.error(f"Failed to store pattern: {e}")
@@ -198,7 +190,7 @@ class MistakeLearner:
                     FROM learned_patterns
                     WHERE priority >= ?
                 """
-                params = [min_priority]
+                params: List[Any] = [min_priority]
 
                 if error_type:
                     query += " AND error_type = ?"
@@ -243,8 +235,8 @@ class MistakeLearner:
 
     def get_patterns_for_generation(
         self,
-        tags: List[str] = None,
-        error_hints: List[str] = None,
+        tags: Optional[List[str]] = None,
+        error_hints: Optional[List[str]] = None,
     ) -> List[Dict]:
         """
         Get patterns to inject into code generation prompts.
@@ -299,7 +291,8 @@ class MistakeLearner:
                     UPDATE learned_patterns
                     SET
                         usage_count = usage_count + 1,
-                        success_rate = (success_rate * (usage_count - 1) + ?) / NULLIF(usage_count, 0),
+                        success_rate = (success_rate * (usage_count - 1) + ?) /
+                                       NULLIF(usage_count, 0),
                         last_used = ?
                     WHERE id = ?
                 """,
@@ -335,14 +328,15 @@ class MistakeLearner:
                 cursor.execute("SELECT COUNT(*) FROM learned_patterns")
                 total_patterns = cursor.fetchone()[0]
 
-                cursor.execute(
-                    "SELECT error_type, COUNT(*) FROM learned_patterns GROUP BY error_type"
-                )
+                sql = "SELECT error_type, COUNT(*) FROM learned_patterns GROUP BY error_type"
+                cursor.execute(sql)
                 error_type_counts = dict(cursor.fetchall())
 
-                cursor.execute(
-                    "SELECT AVG(success_rate), MAX(success_rate), MIN(success_rate) FROM learned_patterns"
-                )
+                sql = """
+                    SELECT AVG(success_rate), MAX(success_rate), MIN(success_rate)
+                    FROM learned_patterns
+                """
+                cursor.execute(sql)
                 success_stats = cursor.fetchone()
 
                 return {
