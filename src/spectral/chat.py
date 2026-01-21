@@ -31,6 +31,7 @@ from spectral.memory_models import ExecutionMemory
 from spectral.memory_reference_resolver import ReferenceResolver
 from spectral.memory_search import MemorySearch
 from spectral.orchestrator import Orchestrator
+from spectral.penetration_tester import PenetrationTester
 from spectral.persistent_memory import MemoryModule
 from spectral.prompts import METASPLOIT_SYSTEM_PROMPT
 from spectral.reasoning import Plan, ReasoningModule
@@ -447,48 +448,28 @@ class ChatSession:
 
         return "\n".join(lines) if lines else "No result information available."
 
-    def _is_metasploit_request(self, user_input: str) -> bool:
+    def _is_penetration_test_request(self, user_input: str) -> bool:
         """
-        Detect if user request is related to Metasploit/penetration testing.
+        Detect if user request is related to penetration testing (more flexible).
 
         Args:
             user_input: User's natural language input
 
         Returns:
-            True if this is a Metasploit-related request
+            True if this is a penetration testing request
         """
-        metasploit_keywords = [
-            "metasploit",
-            "msfconsole",
-            "msfvenom",
-            "payload",
-            "exploit",
-            "penetration test",
-            "pentest",
-            "reverse shell",
-            "meterpreter",
-            "create a payload",
-            "generate payload",
-            "hack",
-            "pen testing",
-            "exploit target",
-            "get shell",
-            "backdoor",
-            "ms17-010",
-            "eternalblue",
-            "privilege escalation",
-            "priv esc",
-            "cve-",
-            "vulnerability scan",
-            "msf>",
-            "search exploit",
-            "use exploit",
-            "handler",
-            "listener",
+        import re
+
+        # Flexible patterns for pentest requests - more conversational than hardcoded keywords
+        pentest_patterns = [
+            r"\b(test|exploit|penetration|pentest|hack|crack|assess|auditvulnerability)\b",
+            r"\btarget\b.*\b(windows|linux|android|ios|server|machine|computer)\b",
+            r"\b(?:\d{1,3}\.){3}\d{1,3}\b.*\b(windows|linux|ssh|rdp|smb|http|service)\b",  # IP + OS/service
+            r"\b(cve|vulnerability|vuln|exploit)\b.*\b(windows|linux|android|ios)\b",
+            r"\b(reverse shell|backdoor|rce|remote code|privilege escalation|privesc)\b",
         ]
 
-        input_lower = user_input.lower()
-        return any(keyword in input_lower for keyword in metasploit_keywords)
+        return any(re.search(pattern, user_input, re.IGNORECASE) for pattern in pentest_patterns)
 
     def _handle_metasploit_request(self, user_input: str) -> str:
         """
@@ -686,6 +667,97 @@ class ChatSession:
             error_response = f"Error handling Metasploit request: {str(e)}"
             yield error_response
 
+    def _handle_intelligent_penetration_test(self, user_input: str) -> str:
+        """
+        Handle penetration testing request through intelligent conversation.
+
+        NOT hardcoded shortcuts - uses AI reasoning and research.
+        """
+        logger.info("Penetration test request detected - using intelligent methodology")
+
+        # Initialize penetration tester if needed
+        if not hasattr(self, "_pentest_assistant"):
+            research_handler = None
+            if hasattr(self, "research_handler"):
+                research_handler = self.research_handler
+
+            self._pentest_assistant = PenetrationTester(
+                llm_client=self.response_generator.llm_client, research_handler=research_handler
+            )
+
+        # Get intelligent response (NOT shortcut execution)
+        response = self._pentest_assistant.handle_pentest_request(user_input)
+
+        # Add to history
+        context = self.get_context_summary()
+        self.add_message(
+            "user",
+            user_input,
+            metadata={"context": context, "intent": "penetration_test", "intelligent": True},
+        )
+        self.add_message(
+            "assistant",
+            response,
+            metadata={"intent": "penetration_test", "intelligent": True},
+        )
+
+        # Save conversation to memory
+        self._save_to_memory(
+            user_message=user_input,
+            assistant_response=response,
+            execution_history=[],
+        )
+
+        return response
+
+    def _stream_intelligent_penetration_test(self, user_input: str) -> Generator[str, None, None]:
+        """
+        Stream penetration testing request handling with intelligent conversation.
+
+        Args:
+            user_input: User's natural language input
+
+        Yields:
+            Response chunks as they arrive
+        """
+        logger.info("Penetration test request detected in stream - using intelligent methodology")
+
+        # Initialize penetration tester if needed
+        if not hasattr(self, "_pentest_assistant"):
+            research_handler = None
+            if hasattr(self, "research_handler"):
+                research_handler = self.research_handler
+
+            self._pentest_assistant = PenetrationTester(
+                llm_client=self.response_generator.llm_client, research_handler=research_handler
+            )
+
+        # Get intelligent response (NOT shortcut execution)
+        response = self._pentest_assistant.handle_pentest_request(user_input)
+
+        # Add to history
+        context = self.get_context_summary()
+        self.add_message(
+            "user",
+            user_input,
+            metadata={"context": context, "intent": "penetration_test", "intelligent": True},
+        )
+        self.add_message(
+            "assistant",
+            response,
+            metadata={"intent": "penetration_test", "intelligent": True},
+        )
+
+        # Save conversation to memory
+        self._save_to_memory(
+            user_message=user_input,
+            assistant_response=response,
+            execution_history=[],
+        )
+
+        # Stream the response
+        yield response
+
     def _generate_conversational_response(
         self, user_input: str, execution_result: Optional[Dict[str, Any]]
     ) -> str:
@@ -775,9 +847,9 @@ class ChatSession:
         """
         logger.info(f"Processing user input in chat: {user_input}")
 
-        # Check for Metasploit requests first (specialized handling)
-        if self._is_metasploit_request(user_input):
-            return self._handle_metasploit_request(user_input)
+        # Check for penetration testing requests (intelligent, not hardcoded shortcuts)
+        if self._is_penetration_test_request(user_input):
+            return self._handle_intelligent_penetration_test(user_input)
 
         # Check intent first - handle casual conversation immediately
         intent = self.intent_classifier.classify_intent(user_input)
@@ -977,9 +1049,9 @@ class ChatSession:
         """
         logger.info(f"Processing user input with streaming: {user_input}")
 
-        # Check for Metasploit requests FIRST (specialized handling)
-        if self._is_metasploit_request(user_input):
-            yield from self._stream_metasploit_request(user_input)
+        # Check for penetration testing requests (intelligent, not hardcoded shortcuts)
+        if self._is_penetration_test_request(user_input):
+            yield from self._stream_intelligent_penetration_test(user_input)
             return
 
         # Check if this is a simple program request
