@@ -85,6 +85,10 @@ class GUIApp(customtkinter.CTk):
             memory_module=memory_module,
         )
 
+        # Connect GUI callback to dual execution orchestrator for sandbox streaming
+        if self.dual_execution_orchestrator:
+            self.dual_execution_orchestrator.gui_callback = self.get_gui_callback()
+
         # GUI state
         self._processing = False
         self._current_command = ""

