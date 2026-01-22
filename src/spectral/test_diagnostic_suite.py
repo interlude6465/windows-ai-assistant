@@ -22,11 +22,13 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+from spectral.config import ConfigLoader
 from spectral.execution_models import ExecutionMode
 from spectral.execution_router import ExecutionRouter
 from spectral.intent_classifier import IntentClassifier
+from spectral.llm_client import LLMClient
 
 # Configure logging
 logging.basicConfig(
@@ -108,10 +110,16 @@ class TestSuiteReport:
 class DiagnosticTestSuite:
     """Main diagnostic test suite for AI functionality."""
 
-    def __init__(self, dry_run: bool = False):
-        """Initialize the test suite."""
+    def __init__(self, dry_run: bool = False, llm_client: Optional[Any] = None):
+        """
+        Initialize the test suite.
+
+        Args:
+            dry_run: If True, simulate tests without actual execution
+            llm_client: Optional LLM client for semantic intent classification
+        """
         self.dry_run = dry_run
-        self.intent_classifier = IntentClassifier()
+        self.intent_classifier = IntentClassifier(llm_client=llm_client)
         self.execution_router = ExecutionRouter()
         self.test_data = self._load_test_data()
         self.report = TestSuiteReport()
@@ -988,14 +996,36 @@ async def main():
         "--dry-run", action="store_true", help="Run in dry-run mode (validate test structure only)"
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    parser.add_argument(
+        "--config",
+        "-c",
+        type=str,
+        default=None,
+        help="Path to configuration file (YAML or JSON)",
+    )
 
     args = parser.parse_args()
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    # Try to initialize LLM client for semantic intent classification
+    llm_client = None
+    if not args.dry_run:
+        try:
+            config_loader = ConfigLoader(config_path=args.config)
+            config = config_loader.load()
+            llm_client = LLMClient(config=config.llm)
+            logger.info("LLM client initialized for semantic intent classification")
+        except Exception as e:
+            logger.warning(
+                "Failed to initialize LLM client: %s",
+                e,
+            )
+            logger.info("Intent classifier will use heuristic classification only")
+
     # Initialize test suite
-    suite = DiagnosticTestSuite(dry_run=args.dry_run)
+    suite = DiagnosticTestSuite(dry_run=args.dry_run, llm_client=llm_client)
 
     # Determine which categories to run
     categories = None

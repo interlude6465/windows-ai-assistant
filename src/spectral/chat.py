@@ -123,7 +123,23 @@ class ChatSession:
         self._cancel_event = threading.Event()
 
         # Initialize intent classifier and response generator if not provided
-        self.intent_classifier = intent_classifier or IntentClassifier()
+        if intent_classifier:
+            self.intent_classifier = intent_classifier
+        else:
+            # Get LLM client from response generator or create one
+            llm_client_for_intent = None
+            if response_generator and hasattr(response_generator, 'llm_client'):
+                llm_client_for_intent = response_generator.llm_client
+            elif config:
+                try:
+                    llm_client_for_intent = LLMClient(config.llm)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to initialize LLM client for intent classification: %s",
+                        e,
+                    )
+
+            self.intent_classifier = IntentClassifier(llm_client=llm_client_for_intent)
 
         # Initialize conversation memory for context-aware responses
         if response_generator and hasattr(response_generator, "conversation_memory"):

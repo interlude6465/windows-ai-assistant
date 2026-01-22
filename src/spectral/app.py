@@ -60,9 +60,7 @@ class GUIApp(customtkinter.CTk):
         self.memory_module = memory_module
         self.sandbox_debug_mode = sandbox_debug_mode
 
-        # Initialize intent classifier and response generator
-        self.intent_classifier = IntentClassifier()
-
+        # Initialize LLM client
         llm_client = None
         try:
             llm_client = LLMClient(self.config.llm)
@@ -71,6 +69,9 @@ class GUIApp(customtkinter.CTk):
                 "Failed to initialize LLM client; falling back to template responses: %s",
                 e,
             )
+
+        # Initialize intent classifier with LLM client for semantic understanding
+        self.intent_classifier = IntentClassifier(llm_client=llm_client)
 
         self.response_generator = ResponseGenerator(llm_client=llm_client)
 
