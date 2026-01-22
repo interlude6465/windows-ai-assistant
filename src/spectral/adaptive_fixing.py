@@ -468,9 +468,9 @@ class AdaptiveFixEngine:
             )
             return True
 
-        # Hard limit: never exceed 25 retries even if max_retries is None
-        if retry_count >= 25:
-            logger.warning(f"Hard limit of 25 retries exceeded for step {step_number}")
+        # Hard limit: never exceed 5 retries for direct execution (reduced from 25)
+        if retry_count >= 5:
+            logger.warning(f"Hard limit of 5 retries exceeded for step {step_number}")
             return True
 
         # Check user-specified max_retries if provided
