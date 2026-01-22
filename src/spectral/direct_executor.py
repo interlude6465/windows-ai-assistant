@@ -5,6 +5,7 @@ Handles DIRECT mode requests: generate code, verify in sandbox, execute in isola
 Integrates with SandboxRunManager for robust verification pipeline.
 """
 
+import ast
 import logging
 import os
 import re
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Generator, List, Optional, Set
@@ -35,6 +37,634 @@ from spectral.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ValidationIssue:
+    """Represents a code validation issue."""
+
+    severity: str  # "warning" or "error"
+    issue_type: str  # "infinite_loop", "missing_timeout", "blocking_call", etc.
+    message: str
+    line_number: Optional[int] = None
+    suggestion: Optional[str] = None
+
+
+@dataclass
+class ValidationResult:
+    """Result of code validation."""
+
+    is_valid: bool
+    issues: List[ValidationIssue]
+    checks_performed: List[str]
+
+    def has_errors(self) -> bool:
+        """Check if validation found any errors (not just warnings)."""
+        return any(issue.severity == "error" for issue in self.issues)
+
+    def get_error_messages(self) -> List[str]:
+        """Get all error messages."""
+        return [issue.message for issue in self.issues if issue.severity == "error"]
+
+    def get_warning_messages(self) -> List[str]:
+        """Get all warning messages."""
+        return [issue.message for issue in self.issues if issue.severity == "warning"]
+
+
+class CodeValidator:
+    """
+    Validates generated code for common issues before execution.
+
+    Performs static analysis to detect:
+    - Infinite loops (while True without break/timeout)
+    - Missing timeouts on I/O operations
+    - Blocking calls (input(), long sleep())
+    - Missing structure (functions without returns)
+    - Logic errors (unreachable code, undefined variables)
+    """
+
+    def __init__(self):
+        self.checks_performed: List[str] = []
+
+    def validate(self, code: str) -> ValidationResult:
+        """
+        Validate code for common issues.
+
+        Args:
+            code: Python code to validate
+
+        Returns:
+            ValidationResult with detected issues
+        """
+        self.checks_performed = []
+        issues: List[ValidationIssue] = []
+
+        # Try to parse the code as AST
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    issue_type="syntax_error",
+                    message=f"Syntax error: {e.msg}",
+                    line_number=e.lineno,
+                    suggestion="Fix syntax errors before execution",
+                )
+            )
+            return ValidationResult(is_valid=False, issues=issues, checks_performed=["syntax"])
+
+        # Perform all validation checks
+        issues.extend(self._check_infinite_loops(tree, code))
+        issues.extend(self._check_missing_timeouts(tree, code))
+        issues.extend(self._check_blocking_calls(tree, code))
+        issues.extend(self._check_missing_returns(tree))
+        issues.extend(self._check_unreachable_code(tree))
+        issues.extend(self._check_undefined_variables(tree))
+
+        # Determine if code is valid (no errors, warnings are OK)
+        has_errors = any(issue.severity == "error" for issue in issues)
+        is_valid = not has_errors
+
+        return ValidationResult(
+            is_valid=is_valid, issues=issues, checks_performed=self.checks_performed
+        )
+
+    def _check_infinite_loops(self, tree: ast.AST, code: str) -> List[ValidationIssue]:
+        """Check for infinite loops without break/timeout conditions."""
+        self.checks_performed.append("infinite_loops")
+        issues: List[ValidationIssue] = []
+
+        class LoopVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.issues: List[ValidationIssue] = []
+
+            def visit_While(self, node: ast.While):
+                # Check for while True without break
+                if isinstance(node.test, ast.Constant) and node.test.value is True:
+                    has_break = self._has_break_or_return(node.body)
+                    has_timeout_logic = self._has_timeout_logic(node.body)
+
+                    if not has_break and not has_timeout_logic:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                issue_type="infinite_loop",
+                                message="Infinite loop detected: 'while True' without break or timeout",
+                                line_number=node.lineno,
+                                suggestion="Add a break condition, timeout check, or iteration counter",
+                            )
+                        )
+                self.generic_visit(node)
+
+            def visit_For(self, node: ast.For):
+                # Check for potentially infinite ranges
+                if isinstance(node.iter, ast.Call):
+                    if isinstance(node.iter.func, ast.Name) and node.iter.func.id == "range":
+                        # Check for very large ranges that might be mistakes
+                        if len(node.iter.args) > 0:
+                            arg = node.iter.args[0]
+                            if isinstance(arg, ast.Constant) and isinstance(arg.value, int):
+                                if arg.value > 1000000:  # More than 1M iterations
+                                    self.issues.append(
+                                        ValidationIssue(
+                                            severity="warning",
+                                            issue_type="large_loop",
+                                            message=f"Very large loop detected: range({arg.value})",
+                                            line_number=node.lineno,
+                                            suggestion="Consider adding progress indicators or breaking into smaller chunks",
+                                        )
+                                    )
+                self.generic_visit(node)
+
+            def _has_break_or_return(self, body: List[ast.stmt]) -> bool:
+                """Check if body contains break or return statement."""
+                for node in ast.walk(ast.Module(body=body, type_ignores=[])):
+                    if isinstance(node, (ast.Break, ast.Return)):
+                        return True
+                return False
+
+            def _has_timeout_logic(self, body: List[ast.stmt]) -> bool:
+                """Check if body contains timeout-related logic."""
+                for node in ast.walk(ast.Module(body=body, type_ignores=[])):
+                    # Look for time.time() comparisons or timeout variables
+                    if isinstance(node, ast.Compare):
+                        for comp in ast.walk(node):
+                            if isinstance(comp, ast.Attribute):
+                                if comp.attr in ["time", "timeout", "elapsed"]:
+                                    return True
+                            if isinstance(comp, ast.Name):
+                                if comp.id in ["timeout", "start_time", "elapsed", "deadline"]:
+                                    return True
+                return False
+
+        visitor = LoopVisitor()
+        visitor.visit(tree)
+        issues.extend(visitor.issues)
+
+        # Also check for recursive functions without clear base case
+        issues.extend(self._check_recursive_functions(tree))
+
+        return issues
+
+    def _check_recursive_functions(self, tree: ast.AST) -> List[ValidationIssue]:
+        """Check for recursive functions without obvious base case."""
+        issues: List[ValidationIssue] = []
+
+        class RecursionVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.issues: List[ValidationIssue] = []
+                self.current_function: Optional[str] = None
+
+            def visit_FunctionDef(self, node: ast.FunctionDef):
+                old_function = self.current_function
+                self.current_function = node.name
+
+                # Check if function calls itself
+                has_recursive_call = False
+                has_base_case = False
+
+                for child in ast.walk(node):
+                    if isinstance(child, ast.Call):
+                        if isinstance(child.func, ast.Name) and child.func.id == node.name:
+                            has_recursive_call = True
+
+                    # Look for return statements (potential base cases)
+                    if isinstance(child, ast.Return):
+                        has_base_case = True
+
+                if has_recursive_call and not has_base_case:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            issue_type="recursive_no_base",
+                            message=f"Recursive function '{node.name}' may lack base case",
+                            line_number=node.lineno,
+                            suggestion="Ensure function has clear termination condition",
+                        )
+                    )
+
+                self.generic_visit(node)
+                self.current_function = old_function
+
+        visitor = RecursionVisitor()
+        visitor.visit(tree)
+        return visitor.issues
+
+    def _check_missing_timeouts(self, tree: ast.AST, code: str) -> List[ValidationIssue]:
+        """Check for I/O operations without timeouts."""
+        self.checks_performed.append("missing_timeouts")
+        issues: List[ValidationIssue] = []
+
+        class TimeoutVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.issues: List[ValidationIssue] = []
+                self.has_socket_timeout = False
+
+            def visit_Call(self, node: ast.Call):
+                # Check for socket operations
+                if isinstance(node.func, ast.Attribute):
+                    # socket.socket() creation
+                    if node.func.attr == "socket":
+                        # Look ahead for .settimeout() call
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                issue_type="missing_timeout",
+                                message="Socket created without explicit timeout",
+                                line_number=node.lineno,
+                                suggestion="Add socket.settimeout(timeout_seconds) after creation",
+                            )
+                        )
+
+                    # socket.connect() without timeout
+                    if node.func.attr in ["connect", "accept", "recv", "recvfrom"]:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                issue_type="missing_timeout",
+                                message=f"Socket operation '{node.func.attr}' may block indefinitely",
+                                line_number=node.lineno,
+                                suggestion="Ensure socket has timeout set with settimeout()",
+                            )
+                        )
+
+                    # threading operations without timeout
+                    if node.func.attr == "join" and not node.args:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                issue_type="missing_timeout",
+                                message="Thread.join() called without timeout",
+                                line_number=node.lineno,
+                                suggestion="Add timeout parameter: thread.join(timeout=30)",
+                            )
+                        )
+
+                    # requests library without timeout
+                    if node.func.attr in ["get", "post", "put", "delete", "request"]:
+                        has_timeout = any(
+                            isinstance(kw.value, (ast.Constant, ast.Name)) and kw.arg == "timeout"
+                            for kw in node.keywords
+                        )
+                        if not has_timeout:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="warning",
+                                    issue_type="missing_timeout",
+                                    message=f"HTTP request '{node.func.attr}' without timeout",
+                                    line_number=node.lineno,
+                                    suggestion="Add timeout parameter: requests.get(url, timeout=10)",
+                                )
+                            )
+
+                self.generic_visit(node)
+
+        visitor = TimeoutVisitor()
+        visitor.visit(tree)
+        issues.extend(visitor.issues)
+
+        # Regex check for common blocking patterns
+        # Check if code has socket creation but no settimeout() call
+        has_socket = re.search(r"socket\.socket\s*\(", code)
+        has_timeout = re.search(r"settimeout\s*\(", code)
+
+        if has_socket and not has_timeout:
+            # This is a critical error - socket without timeout will block indefinitely
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    issue_type="missing_timeout",
+                    message="Socket code missing timeout configuration",
+                    suggestion="Add sock.settimeout(30) after socket creation",
+                )
+            )
+
+        return issues
+
+    def _check_blocking_calls(self, tree: ast.AST, code: str) -> List[ValidationIssue]:
+        """Check for blocking calls that may hang."""
+        self.checks_performed.append("blocking_calls")
+        issues: List[ValidationIssue] = []
+
+        class BlockingVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.issues: List[ValidationIssue] = []
+
+            def visit_Call(self, node: ast.Call):
+                # Check for input() calls
+                if isinstance(node.func, ast.Name) and node.func.id == "input":
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            issue_type="blocking_call",
+                            message="input() call detected - will block execution",
+                            line_number=node.lineno,
+                            suggestion="Replace with hardcoded test value or remove interactive input",
+                        )
+                    )
+
+                # Check for sleep() with long duration
+                if isinstance(node.func, ast.Attribute) and node.func.attr == "sleep":
+                    if node.args and isinstance(node.args[0], ast.Constant):
+                        sleep_time = node.args[0].value
+                        if isinstance(sleep_time, (int, float)) and sleep_time > 5:
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="warning",
+                                    issue_type="blocking_call",
+                                    message=f"Long sleep detected: {sleep_time} seconds",
+                                    line_number=node.lineno,
+                                    suggestion="Consider reducing sleep time or adding progress indicators",
+                                )
+                            )
+
+                self.generic_visit(node)
+
+        visitor = BlockingVisitor()
+        visitor.visit(tree)
+        return visitor.issues
+
+    def _check_missing_returns(self, tree: ast.AST) -> List[ValidationIssue]:
+        """Check for functions without return statements."""
+        self.checks_performed.append("missing_returns")
+        issues: List[ValidationIssue] = []
+
+        class ReturnVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.issues: List[ValidationIssue] = []
+
+            def visit_FunctionDef(self, node: ast.FunctionDef):
+                # Skip special methods and main function
+                if node.name.startswith("_") or node.name == "main":
+                    self.generic_visit(node)
+                    return
+
+                # Check if function has any return statement
+                has_return = False
+                for child in ast.walk(node):
+                    if isinstance(child, ast.Return):
+                        has_return = True
+                        break
+
+                # Check if function has type hints suggesting it should return something
+                if node.returns is not None and not isinstance(node.returns, ast.Constant):
+                    if not has_return:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                issue_type="missing_return",
+                                message=f"Function '{node.name}' has return type hint but no return statement",
+                                line_number=node.lineno,
+                                suggestion="Add explicit return statement",
+                            )
+                        )
+
+                self.generic_visit(node)
+
+        visitor = ReturnVisitor()
+        visitor.visit(tree)
+        return visitor.issues
+
+    def _check_unreachable_code(self, tree: ast.AST) -> List[ValidationIssue]:
+        """Check for unreachable code after return/break/continue."""
+        self.checks_performed.append("unreachable_code")
+        issues: List[ValidationIssue] = []
+
+        class UnreachableVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.issues: List[ValidationIssue] = []
+
+            def visit_FunctionDef(self, node: ast.FunctionDef):
+                self._check_block(node.body)
+                self.generic_visit(node)
+
+            def visit_If(self, node: ast.If):
+                self._check_block(node.body)
+                self._check_block(node.orelse)
+                self.generic_visit(node)
+
+            def visit_While(self, node: ast.While):
+                self._check_block(node.body)
+                self.generic_visit(node)
+
+            def visit_For(self, node: ast.For):
+                self._check_block(node.body)
+                self.generic_visit(node)
+
+            def _check_block(self, body: List[ast.stmt]):
+                """Check a block of statements for unreachable code."""
+                for i, stmt in enumerate(body):
+                    # If this is a return/break/continue and there's more code after
+                    if isinstance(stmt, (ast.Return, ast.Break, ast.Continue)):
+                        if i + 1 < len(body):
+                            next_stmt = body[i + 1]
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="warning",
+                                    issue_type="unreachable_code",
+                                    message="Unreachable code detected after return/break/continue",
+                                    line_number=next_stmt.lineno,
+                                    suggestion="Remove or restructure unreachable code",
+                                )
+                            )
+                            break
+
+        visitor = UnreachableVisitor()
+        visitor.visit(tree)
+        return visitor.issues
+
+    def _check_undefined_variables(self, tree: ast.AST) -> List[ValidationIssue]:
+        """Check for obvious undefined variable usage."""
+        self.checks_performed.append("undefined_variables")
+        issues: List[ValidationIssue] = []
+
+        class VariableVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.issues: List[ValidationIssue] = []
+                self.defined_vars: Set[str] = set()
+                self.used_before_def: Set[str] = set()
+                self.imported_modules: Set[str] = set()
+
+            def visit_Import(self, node: ast.Import):
+                # Track imported modules
+                for alias in node.names:
+                    name = alias.asname if alias.asname else alias.name
+                    self.imported_modules.add(name)
+                    self.defined_vars.add(name)
+                self.generic_visit(node)
+
+            def visit_ImportFrom(self, node: ast.ImportFrom):
+                # Track imported names
+                for alias in node.names:
+                    name = alias.asname if alias.asname else alias.name
+                    self.imported_modules.add(name)
+                    self.defined_vars.add(name)
+                self.generic_visit(node)
+
+            def visit_FunctionDef(self, node: ast.FunctionDef):
+                # Add function name to defined variables
+                self.defined_vars.add(node.name)
+
+                # Save current scope
+                old_vars = self.defined_vars.copy()
+
+                # Add function parameters to defined variables
+                for arg in node.args.args:
+                    self.defined_vars.add(arg.arg)
+
+                # Visit function body
+                self.generic_visit(node)
+
+                # Restore scope
+                self.defined_vars = old_vars
+
+            def visit_For(self, node: ast.For):
+                # Add loop variable to defined variables
+                if isinstance(node.target, ast.Name):
+                    self.defined_vars.add(node.target.id)
+                self.generic_visit(node)
+
+            def visit_Assign(self, node: ast.Assign):
+                # Mark all assigned names as defined
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.defined_vars.add(target.id)
+                self.generic_visit(node)
+
+            def visit_AugAssign(self, node: ast.AugAssign):
+                # x += 1 requires x to be defined first
+                if isinstance(node.target, ast.Name):
+                    if (
+                        node.target.id not in self.defined_vars
+                        and node.target.id not in self.imported_modules
+                    ):
+                        self.used_before_def.add(node.target.id)
+                    self.defined_vars.add(node.target.id)
+                self.generic_visit(node)
+
+            def visit_Name(self, node: ast.Name):
+                # Check if variable is used before definition
+                if isinstance(node.ctx, ast.Load):
+                    # Skip common builtins and imports
+                    builtins = {
+                        "print",
+                        "len",
+                        "range",
+                        "str",
+                        "int",
+                        "float",
+                        "list",
+                        "dict",
+                        "set",
+                        "tuple",
+                        "True",
+                        "False",
+                        "None",
+                        "open",
+                        "input",
+                        "type",
+                        "isinstance",
+                        "hasattr",
+                        "getattr",
+                        "setattr",
+                        "__name__",
+                        "__main__",
+                    }
+                    if (
+                        node.id not in self.defined_vars
+                        and node.id not in builtins
+                        and node.id not in self.imported_modules
+                    ):
+                        self.used_before_def.add(node.id)
+                self.generic_visit(node)
+
+        visitor = VariableVisitor()
+        visitor.visit(tree)
+
+        # Report variables that might be used before definition
+        # Filter out common false positives
+        for var in visitor.used_before_def:
+            # Skip if it looks like it might be a module attribute
+            if var in visitor.imported_modules:
+                continue
+
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    issue_type="undefined_variable",
+                    message=f"Variable '{var}' may be used before definition",
+                    suggestion=f"Ensure '{var}' is defined before use",
+                )
+            )
+
+        return issues
+
+    def suggest_fix(self, code: str, issue: ValidationIssue) -> Optional[str]:
+        """
+        Suggest a minimal fix for a validation issue.
+
+        Args:
+            code: Original code
+            issue: Validation issue to fix
+
+        Returns:
+            Fixed code or None if no automatic fix available
+        """
+        if issue.issue_type == "infinite_loop":
+            # Add iteration counter to while True loops
+            lines = code.split("\n")
+            fixed_lines = []
+            in_while_true = False
+            indent_level = 0
+
+            for i, line in enumerate(lines):
+                if "while True:" in line:
+                    in_while_true = True
+                    indent_level = len(line) - len(line.lstrip())
+                    # Add counter before while loop
+                    fixed_lines.append(f"{' ' * indent_level}_iteration_count = 0")
+                    fixed_lines.append(f"{' ' * indent_level}_max_iterations = 10000")
+                    fixed_lines.append(line)
+                    # Add counter check inside loop
+                    fixed_lines.append(f"{' ' * (indent_level + 4)}_iteration_count += 1")
+                    fixed_lines.append(
+                        f"{' ' * (indent_level + 4)}if _iteration_count >= _max_iterations:"
+                    )
+                    fixed_lines.append(f"{' ' * (indent_level + 8)}break")
+                    in_while_true = False
+                else:
+                    fixed_lines.append(line)
+
+            return "\n".join(fixed_lines)
+
+        elif issue.issue_type == "missing_timeout" and "socket" in code.lower():
+            # Add socket timeout
+            lines = code.split("\n")
+            fixed_lines = []
+
+            for line in lines:
+                fixed_lines.append(line)
+                if "socket.socket(" in line or "socket(" in line:
+                    indent = len(line) - len(line.lstrip())
+                    # Extract socket variable name
+                    match = re.search(r"(\w+)\s*=\s*socket", line)
+                    if match:
+                        sock_var = match.group(1)
+                        fixed_lines.append(f"{' ' * indent}{sock_var}.settimeout(30)")
+
+            return "\n".join(fixed_lines)
+
+        elif issue.issue_type == "blocking_call" and "input()" in code:
+            # Replace input() with hardcoded test value
+            fixed_code = re.sub(
+                r"(\w+)\s*=\s*input\([^)]*\)",
+                r'\1 = "test_input"  # Auto-replaced input() call',
+                code,
+            )
+            return fixed_code
+
+        return None
 
 
 class DirectCodeRunner:
@@ -342,24 +972,24 @@ class DirectCodeRunner:
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
 
             if capture_output:
-                process = subprocess.run(
+                result = subprocess.run(
                     [sys.executable, str(script_path)],
                     capture_output=True,
                     text=True,
                     timeout=timeout,
                     creationflags=creation_flags,
                 )
-                return process.returncode, process.stdout or "", process.stderr or ""
+                return result.returncode, result.stdout or "", result.stderr or ""
             else:
-                process = subprocess.Popen(
+                proc = subprocess.Popen(
                     [sys.executable, str(script_path)],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                     creationflags=creation_flags,
                 )
-                stdout, stderr = process.communicate(timeout=timeout)
-                return process.returncode or 0, stdout or "", stderr or ""
+                stdout, stderr = proc.communicate(timeout=timeout)
+                return proc.returncode or 0, stdout or "", stderr or ""
 
         except subprocess.TimeoutExpired:
             logger.warning(f"Code execution timed out after {timeout}s")
@@ -417,6 +1047,7 @@ class DirectExecutor:
 
         # Use DirectCodeRunner for unrestricted execution
         self.direct_runner = DirectCodeRunner()
+        self.code_validator = CodeValidator()
         self._execution_history: list[ExecutionMemory] = []
         logger.info("DirectExecutor initialized with direct code execution (no sandbox)")
 
@@ -848,6 +1479,72 @@ class DirectExecutor:
                 if has_interactive:
                     yield f"🔍 Detected {input_count} input() call(s)\n"
 
+                # Validate code before execution
+                yield "🔍 Validating code for common issues...\n"
+                validation_result = self.code_validator.validate(code)
+
+                # Show what was checked
+                if validation_result.checks_performed:
+                    checks = ", ".join(validation_result.checks_performed)
+                    yield f"   ✓ Checks performed: {checks}\n"
+
+                # Handle validation issues
+                if validation_result.issues:
+                    # Show warnings (non-blocking)
+                    warnings = validation_result.get_warning_messages()
+                    if warnings:
+                        for warning in warnings:
+                            yield f"   ⚠️ Warning: {warning}\n"
+
+                    # Show errors (blocking)
+                    errors = validation_result.get_error_messages()
+                    if errors:
+                        yield f"\n❌ Validation found {len(errors)} critical issue(s):\n"
+                        for error in errors:
+                            yield f"   • {error}\n"
+
+                        # Attempt ONE fix for the first error
+                        if attempt == 1:
+                            yield "\n🔧 Attempting automatic fix...\n"
+                            first_error = next(
+                                (
+                                    issue
+                                    for issue in validation_result.issues
+                                    if issue.severity == "error"
+                                ),
+                                None,
+                            )
+                            if first_error:
+                                fixed_code = self.code_validator.suggest_fix(code, first_error)
+                                if fixed_code:
+                                    code = fixed_code
+                                    yield f"   ✓ Applied fix: {first_error.suggestion}\n"
+                                    yield "   ↻ Re-validating fixed code...\n"
+                                    # Re-validate
+                                    validation_result = self.code_validator.validate(code)
+                                    if validation_result.has_errors():
+                                        yield "   ❌ Fix did not resolve all issues\n"
+                                        last_error_output = "\n".join(
+                                            validation_result.get_error_messages()
+                                        )
+                                        retry_manager.register_failure(last_error_output)
+                                        continue
+                                    else:
+                                        yield "   ✓ Code validation passed after fix\n\n"
+                                else:
+                                    yield "   ⚠️ No automatic fix available\n"
+                                    yield "   ❌ Aborting execution due to validation errors\n"
+                                    last_error_output = "\n".join(errors)
+                                    return
+                        else:
+                            # Already tried fixing, abort
+                            yield "\n❌ Code still has validation errors after fix attempt\n"
+                            yield "   Aborting to prevent timeout/hang\n"
+                            last_error_output = "\n".join(errors)
+                            return
+                else:
+                    yield "   ✓ Validation passed - no issues found\n\n"
+
                 # Save to Desktop first
                 yield "💾 Saving code to Desktop...\n"
                 try:
@@ -951,7 +1648,7 @@ class DirectExecutor:
                         ]
                     ):
                         yield f"⚠️ Permission/environment error - not retrying\n"
-yield f"Error: {last_error_output[:200]}\n"
+                        yield f"Error: {last_error_output[:200]}\n"
                         return
 
                     # Skip retry for environment setup (missing packages will be auto-installed)
