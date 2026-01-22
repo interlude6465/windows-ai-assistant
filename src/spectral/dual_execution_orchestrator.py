@@ -276,6 +276,7 @@ Save any generated files to the Desktop."""
                         if self.adaptive_fix_engine.should_abort_retry(
                             step.step_number,
                             error_type,
+                            error_details,
                             attempt,
                             diagnosis.fix_strategy,
                             max_attempts,
@@ -351,39 +352,82 @@ Save any generated files to the Desktop."""
 
         prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
-Task: Write Python code to accomplish this step:
-{step.description}
+═══════════════════════════════════════════════════════════════════════════════
+🔓 MULTI-STEP CODE GENERATION - FULL SYSTEM ACCESS
+═══════════════════════════════════════════════════════════════════════════════
 
 Original Request: {user_input}
 
-Remember:
-- Hard-code all input values
-- No input() calls
-- Code must run autonomously
-- Produce output immediately
+Current Step: {step.description}
+Step Number: {step.step_number}
 
-IMPORTANT: You are running on Windows. Always use Windows paths:
-- Home directory: C:\\Users\\{username}
-- Desktop: C:\\Users\\{username}\\Desktop
-- Temp: C:\\Users\\{username}\\AppData\\Local\\Temp
+You have FULL SYSTEM ACCESS. Generate COMPLETE, WORKING code for this specific step.
 
-NEVER use:
-- /path/to/... (Unix paths)
-- /usr/bin, /home, /var (Unix directories)
-- Relative paths like './data' (use full Windows paths)
+═══════════════════════════════════════════════════════════════════════════════
+📋 REQUIREMENTS
+═══════════════════════════════════════════════════════════════════════════════
 
-For file operations, use:
-- os.path.expanduser('~') for home directory
-- os.path.join() for path construction
-- Always use backslashes or raw strings: r'C:\\path\\to\\file'
+1. COMPLETENESS:
+   - Write FULL implementation for THIS step only
+   - Include ALL necessary imports
+   - Make it immediately executable
+   - No TODO comments or placeholders
 
-General Requirements:
-- Write complete, executable code
-- Include proper error handling
-- Add comments explaining the code
-- Make it production-ready
-- No extra text or explanations, just the code
-- Return only the code, no markdown formatting, no explanations."""
+2. FULL ACCESS CAPABILITIES:
+   - Read/write files anywhere: C:\\Users\\{username}\\
+   - Network operations with raw sockets
+   - System commands via subprocess
+   - Any pip packages (auto-installed)
+   - Desktop output: C:\\Users\\{username}\\Desktop
+
+3. ERROR HANDLING:
+   - Wrap risky operations in try/except
+   - Add timeouts for I/O operations:
+     * socket.settimeout(30)
+     * requests.get(url, timeout=10)
+     * thread.join(timeout=30)
+   - Log errors clearly
+
+4. AUTONOMY:
+   - Hard-code ALL test values
+   - NO input() calls
+   - No user interaction required
+   - Print progress messages
+
+5. WINDOWS PATHS:
+   - Use pathlib.Path or os.path
+   - Home: C:\\Users\\{username}
+   - Desktop: C:\\Users\\{username}\\Desktop
+   - Temp: C:\\Users\\{username}\\AppData\\Local\\Temp
+   - Use raw strings: r'C:\\path' or Path()
+
+═══════════════════════════════════════════════════════════════════════════════
+🔍 VERIFICATION CHECKLIST (Before returning code)
+═══════════════════════════════════════════════════════════════════════════════
+
+✓ All imports correct and available
+✓ No infinite loops (all loops have exit conditions)
+✓ Timeouts on I/O operations (sockets, requests, threads)
+✓ Proper error handling (try/except blocks)
+✓ No input() calls or interactive prompts
+✓ Windows paths used correctly
+✓ Code is complete and immediately runnable
+
+═══════════════════════════════════════════════════════════════════════════════
+📤 OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════════════
+
+Return ONLY valid Python code in a single code block:
+
+```python
+# Complete, working code for this step
+```
+
+Rules:
+- ONE ```python ... ``` block only
+- No explanations outside code
+- No markdown text before/after
+- Code must work on first execution"""
 
         try:
             raw_code = self.llm_client.generate(prompt)

@@ -308,22 +308,21 @@ class AdaptiveFixEngine:
             return ErrorCategory.NOT_RETRYABLE
 
         # MALFORMED_FIX: Recovery attempts that made things worse
-        if any(
-            keyword in details_lower
-            for keyword in [
-                "not defined",
-                "undefined variable",
-                "name '" in details_lower and "' is not defined" in details_lower,
-                "unexpected indent",
-                "unindent does not match",
-                "invalid syntax",
-                "missing colon",
-                "missing parenthesis",
-                "missing bracket",
-                "out of scope",
-                "referenced before assignment",
-            ]
-        ):
+        malformed_keywords = [
+            "not defined",
+            "undefined variable",
+            "unexpected indent",
+            "unindent does not match",
+            "invalid syntax",
+            "missing colon",
+            "missing parenthesis",
+            "missing bracket",
+            "out of scope",
+            "referenced before assignment",
+        ]
+        # Check for composite pattern
+        has_name_not_defined = "name '" in details_lower and "' is not defined" in details_lower
+        if has_name_not_defined or any(keyword in details_lower for keyword in malformed_keywords):
             return ErrorCategory.MALFORMED_FIX
 
         # RETRY_WORTHY: Actual code bugs that can be fixed
@@ -384,7 +383,10 @@ class AdaptiveFixEngine:
                 error_type=error_type,
                 error_details=error_details,
                 root_cause="Permission/privilege error - requires admin rights",
-                suggested_fix="This operation requires administrator privileges. Run as admin or choose a different approach.",
+                suggested_fix=(
+                    "This operation requires administrator privileges. "
+                    "Run as admin or choose a different approach."
+                ),
                 fix_strategy="abort",
                 confidence=1.0,
             )
@@ -396,8 +398,11 @@ class AdaptiveFixEngine:
                 return FailureDiagnosis(
                     error_type=error_type,
                     error_details=error_details,
-                    root_cause=f"Missing package '{module_name}' - will be auto-installed",
-                    suggested_fix=f"Package {module_name} will be automatically installed by the direct executor",
+                    root_cause=(f"Missing package '{module_name}' - will be auto-installed"),
+                    suggested_fix=(
+                        f"Package {module_name} will be automatically installed "
+                        "by the direct executor"
+                    ),
                     fix_strategy="skip_retry",
                     confidence=1.0,
                 )
@@ -419,8 +424,10 @@ class AdaptiveFixEngine:
             return FailureDiagnosis(
                 error_type=error_type,
                 error_details=error_details,
-                root_cause="Code execution timed out - likely infinite loop or long-running operation",
-                suggested_fix="Check for infinite loops or optimize long-running operations",
+                root_cause=(
+                    "Code execution timed out - likely infinite loop or long-running operation"
+                ),
+                suggested_fix=("Check for infinite loops or optimize long-running operations"),
                 fix_strategy="abort",
                 confidence=0.9,
             )
@@ -440,8 +447,10 @@ class AdaptiveFixEngine:
             return FailureDiagnosis(
                 error_type=error_type,
                 error_details=error_details,
-                root_cause="System resource error - insufficient memory, disk space, or file handles",
-                suggested_fix="Free up system resources or optimize memory usage",
+                root_cause=(
+                    "System resource error - insufficient memory, disk space, or file handles"
+                ),
+                suggested_fix=("Free up system resources or optimize memory usage"),
                 fix_strategy="abort",
                 confidence=0.9,
             )
@@ -470,8 +479,11 @@ class AdaptiveFixEngine:
         return FailureDiagnosis(
             error_type=error_type,
             error_details=error_details,
-            root_cause="Recovery attempt created new errors - malformed fix detected",
-            suggested_fix="The automated fix made things worse. Need complete code regeneration, not patching.",
+            root_cause=("Recovery attempt created new errors - malformed fix detected"),
+            suggested_fix=(
+                "The automated fix made things worse. "
+                "Need complete code regeneration, not patching."
+            ),
             fix_strategy="abort",
             confidence=0.9,
         )
@@ -740,7 +752,8 @@ class AdaptiveFixEngine:
         # Abort if same error repeats 2+ times (no progress detection)
         if self.retry_history[key]["count"] >= 2:
             logger.warning(
-                f"Same error ({error_type}) repeated 2+ times on step {step_number} - no progress, aborting"
+                f"Same error ({error_type}) repeated 2+ times on step {step_number} "
+                "- no progress, aborting"
             )
             return True
 
@@ -1020,46 +1033,120 @@ Return only valid JSON, no other text."""
         self, step: CodeStep, diagnosis: FailureDiagnosis, retry_count: int
     ) -> str:
         """Build prompt for generating fixed code."""
+        import getpass
+
+        username = getpass.getuser()
+
         # Add stdlib-only requirement for ImportError cases
         stdlib_requirement = ""
         if diagnosis.fix_strategy == "stdlib_fallback" or "ImportError" in diagnosis.error_type:
             stdlib_requirement = """
 
-CRITICAL: Use ONLY Python standard library modules (no external packages like asteval,
-numpy, pandas, etc.).
-For simple tasks like calculators, use built-in functions like eval() with proper validation.
-Use built-in modules like re, math, os, sys, json, subprocess, etc. but NO external
-dependencies."""
+⚠️ STDLIB-ONLY REQUIREMENT:
+Use ONLY Python standard library modules - NO external packages (numpy, pandas, asteval, etc.).
+- For math: use built-in math, operator modules
+- For calculations: use eval() with proper input validation
+- For data: use built-in dict, list, json
+Available: os, sys, json, re, math, pathlib, subprocess, datetime, threading, etc."""
 
         prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
-Generate fixed code for this failed step.
+═══════════════════════════════════════════════════════════════════════════════
+🔧 ADAPTIVE FIX REQUEST - Attempt {retry_count + 1}
+═══════════════════════════════════════════════════════════════════════════════
 
-Step Description: {step.description}
+Step: {step.description}
 
-Original Code:
-```python
-{step.code or "No code provided"}
-```
-
-Diagnosis:
+DIAGNOSIS:
 - Root Cause: {diagnosis.root_cause}
 - Suggested Fix: {diagnosis.suggested_fix}
-- Fix Strategy: {diagnosis.fix_strategy}{stdlib_requirement}
+- Fix Strategy: {diagnosis.fix_strategy}
+- Confidence: {diagnosis.confidence:.0%}
 
-This is retry attempt {retry_count + 1}.
+ORIGINAL CODE (That failed):
+```python
+{step.code or "No code provided"}
+```{stdlib_requirement}
 
-Requirements:
-1. Fix the issue identified in the diagnosis
-2. Follow the suggested fix strategy
-3. Add better error handling
-4. Make the code more robust
-5. Use hard-coded inputs instead of input()
-6. Return only the code, no explanations or markdown formatting
-7. Ensure the code is complete and executable
-8. For simple tasks (calculators, basic scripts), use stdlib-only solutions
+═══════════════════════════════════════════════════════════════════════════════
+🎯 YOUR TASK: Generate COMPLETE, WORKING fixed code
+═══════════════════════════════════════════════════════════════════════════════
 
-Return only the fixed code, no other text."""
+You have FULL SYSTEM ACCESS. Apply the diagnosis and generate working code:
+
+1. APPLY THE FIX:
+   - Address the root cause identified
+   - Follow the suggested fix strategy exactly
+   - Don't just patch - fix properly
+
+2. IMPROVE ROBUSTNESS:
+   - Add comprehensive error handling (try/except)
+   - Include timeouts for I/O operations:
+     * socket.settimeout(30)
+     * requests.get(url, timeout=10)
+     * thread.join(timeout=30)
+   - Validate inputs and handle edge cases
+   - Add progress logging
+
+3. ENSURE COMPLETENESS:
+   - All imports correct and available
+   - All functions fully implemented
+   - No TODO comments
+   - Hard-coded test values (NO input() calls)
+   - Proper Windows paths: C:\\Users\\{username}\\Desktop
+
+4. COMMON FIX STRATEGIES:
+
+   regenerate_code:
+   - Rewrite from scratch with proper structure
+   - Fix logic errors and bugs
+   - Ensure all requirements met
+
+   add_error_handling:
+   - Wrap risky operations in try/except
+   - Handle specific exceptions (FileNotFoundError, ConnectionError, etc.)
+   - Add fallback logic
+
+   add_retry_logic:
+   - Implement exponential backoff
+   - Set max retry attempts (3-5)
+   - Add timeout limits
+
+   stdlib_fallback:
+   - Use ONLY standard library modules
+   - Replace external packages with built-in equivalents
+   - Keep it simple and reliable
+
+   install_package:
+   - Ensure package name is correct
+   - Add import with error handling
+   - Package will be auto-installed
+
+5. VERIFICATION:
+   Before returning, verify:
+   ✓ Fix addresses the root cause
+   ✓ No infinite loops
+   ✓ All imports correct
+   ✓ Proper error handling
+   ✓ Timeouts where needed
+   ✓ No input() calls
+   ✓ Code is complete and runnable
+
+═══════════════════════════════════════════════════════════════════════════════
+📤 OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════════════
+
+Return ONLY the fixed Python code wrapped in a single code block:
+
+```python
+# complete fixed code
+```
+
+Rules:
+- Exactly ONE ```python ... ``` block
+- No text before or after
+- No explanations outside the code
+- Code must work on first execution"""
         return prompt
 
     def _parse_diagnosis_response(
