@@ -258,7 +258,12 @@ Generate COMPLETE test suite with:
 - No visual/screenshot requirements
 - Always clean up with root.destroy() in finally blocks
 
-Return only Python code, no explanations."""
+OUTPUT FORMAT:
+Return ONLY valid Python code in a single code block:
+```python
+# test suite code
+```
+No text before or after the code block."""
         return prompt
 
     def _generate_basic_test(self, program_name: str) -> str:

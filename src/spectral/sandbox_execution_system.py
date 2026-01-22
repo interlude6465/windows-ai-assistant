@@ -268,21 +268,38 @@ class SandboxExecutionSystem:
         """
         prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
+═══════════════════════════════════════════════════════════════════════════════
+🔓 CODE GENERATION (Full system access)
+═══════════════════════════════════════════════════════════════════════════════
+
 Task: Generate {language} code for the following request:
 {user_request}
 
-Remember:
-- Hard-code all input values
-- No input() calls
-- Code must run autonomously
-- Produce output immediately
+You have FULL SYSTEM ACCESS:
+- Filesystem, network, OS commands, subprocess, raw sockets
+- Missing packages will be auto-installed via pip
 
 Requirements:
-- Write complete, working code
-- Include proper error handling
-- Use clear variable names
-- Add helpful comments
-- Keep it simple and straightforward
+1. Generate COMPLETE, WORKING code (not pseudo-code)
+2. Include ALL necessary imports
+3. Hard-code all inputs (NO input() calls)
+4. Add proper error handling and logging
+5. Add timeouts for blocking operations (network, threads)
+6. Ensure loops have exit conditions
+7. Produce output immediately and clearly
+
+Before returning code, verify:
+✓ Imports are standard library or common packages
+✓ Timeouts on I/O where applicable
+✓ No infinite loops
+✓ Code is runnable as-is
+
+OUTPUT FORMAT:
+Return ONLY valid Python code wrapped in a single code block:
+```python
+# complete code
+```
+No text before or after the code block.
 """
 
         # Add learned patterns if available

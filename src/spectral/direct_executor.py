@@ -1897,60 +1897,180 @@ class DirectExecutor:
         Returns:
             Fixed code
         """
+        import getpass
+
+        username = getpass.getuser()
+
         # Check if error is from test failures
         is_test_failure = "GUI Tests Failed" in error_output or "FAILED" in error_output
 
         if is_test_failure:
             prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
-The following {language} GUI code failed automated tests:
+═══════════════════════════════════════════════════════════════════════════════
+🔧 CODE FIX REQUEST - GUI Test Failures
+═══════════════════════════════════════════════════════════════════════════════
 
-Request: {user_request}
+Original Request: {user_request}
 Attempt: {attempt}
+Language: {language}
 
-Test Results:
+TEST RESULTS (What went wrong):
 {error_output[:1500]}
 
-Previous Code:
+PREVIOUS CODE (That failed):
+```python
 {previous_code[:1500]}
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+🎯 YOUR TASK: Generate WORKING, TESTED code
+═══════════════════════════════════════════════════════════════════════════════
 
 The automated tests verify:
-- Program initialization
-- UI element creation
-- Event handlers work correctly
-- State changes happen as expected
-- Randomization/variety in behavior
+✓ Program initialization succeeds
+✓ UI elements are created properly
+✓ Event handlers work correctly
+✓ State changes happen as expected
+✓ Randomization/variety functions properly
 
-Analyze the test failures and provide a FIXED version that:
-1. Addresses the specific test failures
-2. Ensures all UI elements are properly created and accessible
-3. Makes sure event handlers are connected and functional
-4. Implements proper state management
-5. Includes variety/randomization where needed
-6. Can be tested programmatically (mock mainloop, testable methods)
-7. Uses hard-coded inputs instead of input()
+You have FULL SYSTEM ACCESS. Generate COMPLETE, WORKING code that:
 
-Return ONLY the complete fixed code, no markdown formatting."""
+1. FIXES THE ROOT CAUSE:
+   - Analyze the exact test failure
+   - Identify what's missing or broken
+   - Fix it completely, not partially
+
+2. ENSURES COMPLETENESS:
+   - All UI elements properly created and accessible
+   - Event handlers connected and functional
+   - State management works correctly
+   - Variety/randomization implemented (if needed)
+   - Code can be tested programmatically
+
+3. MAINTAINS QUALITY:
+   - Proper error handling with try/except
+   - Clear comments explaining the fix
+   - Hard-coded test inputs (NO input() calls)
+   - Follows GUI best practices
+   - Desktop save location: C:\\Users\\{username}\\Desktop
+
+4. VERIFICATION:
+   Before returning, verify:
+   ✓ All test requirements are addressed
+   ✓ No infinite loops or blocking calls
+   ✓ Proper timeouts on async operations
+   ✓ All imports are correct
+   ✓ Code is immediately executable
+
+═══════════════════════════════════════════════════════════════════════════════
+📤 OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════════════
+
+Return ONLY the complete fixed Python code wrapped in a single code block:
+
+```python
+# complete fixed code
+```
+
+Rules:
+- Exactly ONE ```python ... ``` block
+- No text before or after
+- No explanations outside the code
+- Code must work on first execution"""
         else:
             prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
-The following {language} code failed:
+═══════════════════════════════════════════════════════════════════════════════
+🔧 CODE FIX REQUEST - Execution Error
+═══════════════════════════════════════════════════════════════════════════════
 
-Request: {user_request}
+Original Request: {user_request}
 Attempt: {attempt}
-Error: {error_output}
+Language: {language}
 
-Previous Code:
+ERROR OUTPUT (What went wrong):
+{error_output[:1000]}
+
+PREVIOUS CODE (That failed):
+```python
 {previous_code[:1000]}
+```
 
-Analyze the error and provide a FIXED version that:
-1. Addresses the specific error
-2. Maintains the original intent
-3. Uses proper error handling
-4. Includes comments explaining the fix
-5. Uses hard-coded inputs instead of input()
+═══════════════════════════════════════════════════════════════════════════════
+🎯 YOUR TASK: Generate WORKING code
+═══════════════════════════════════════════════════════════════════════════════
 
-Return ONLY the complete fixed code, no markdown formatting."""
+You have FULL SYSTEM ACCESS. Analyze the error and generate COMPLETE, WORKING code:
+
+1. FIX THE ERROR:
+   - Identify the root cause (syntax, logic, import, runtime)
+   - Fix it properly, not with workarounds
+   - Ensure the fix doesn't break other parts
+
+2. IMPROVE ROBUSTNESS:
+   - Add proper error handling (try/except blocks)
+   - Include timeouts for I/O operations
+   - Handle edge cases that caused failure
+   - Add logging/debug prints
+
+3. MAINTAIN FUNCTIONALITY:
+   - Keep the original intent
+   - Implement ALL required features
+   - Use hard-coded test values (NO input() calls)
+   - Save files to: C:\\Users\\{username}\\Desktop
+
+4. COMMON ERROR FIXES:
+
+   ImportError/ModuleNotFoundError:
+   - Check import spelling
+   - Use correct package names
+   - Packages will be auto-installed
+
+   SyntaxError:
+   - Fix indentation
+   - Check for unclosed brackets/quotes
+   - Verify proper Python syntax
+
+   RuntimeError/TypeError:
+   - Check variable types
+   - Add type conversions
+   - Verify function signatures
+
+   TimeoutError:
+   - Add socket.settimeout() for networking
+   - Use requests with timeout parameter
+   - Add thread.join(timeout=30)
+
+   FileNotFoundError:
+   - Check paths use Windows format
+   - Verify files exist before reading
+   - Use pathlib.Path for paths
+
+5. VERIFICATION CHECKLIST:
+   Before returning, verify:
+   ✓ Error is completely fixed
+   ✓ All imports are correct
+   ✓ No infinite loops
+   ✓ Proper error handling
+   ✓ Timeouts where needed
+   ✓ Code is complete and runnable
+
+═══════════════════════════════════════════════════════════════════════════════
+📤 OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════════════
+
+Return ONLY the complete fixed Python code wrapped in a single code block:
+
+```python
+# complete fixed code
+```
+
+Rules:
+- Exactly ONE ```python ... ``` block
+- No text before or after
+- No explanations outside the code
+- Code must work on first execution"""
 
         try:
             code = self.llm_client.generate(prompt)
@@ -1992,50 +2112,170 @@ Return ONLY the complete fixed code, no markdown formatting."""
 Task: Write a {language} script that does the following:
 {user_request}
 
-IMPORTANT: You have FULL SYSTEM ACCESS with no sandbox restrictions:
-- You can access the user's entire filesystem
-- You can create network connections and use raw sockets
-- You can install and use any pip packages automatically
-- You can run system commands and access OS features
-- You have admin-level privileges (note when admin access would be helpful)
+═══════════════════════════════════════════════════════════════════════════════
+🔓 FULL SYSTEM ACCESS AVAILABLE
+═══════════════════════════════════════════════════════════════════════════════
 
-Requirements:
-- Hard-code all input values
-- No input() calls - code must run autonomously
-- Write complete, executable code with full functionality
-- Use any packages you need (they will be installed automatically)
-- Produce output immediately
-- Include proper error handling
-- Add comments explaining the code
-- Make it production-ready
-- No extra text or explanations, just code
+You have COMPLETE, UNRESTRICTED access to the user's system:
 
-Windows Environment:
+✅ FILESYSTEM ACCESS:
+   - Read/write ANY files in ANY directory
+   - Access user's entire filesystem (C:\\Users\\{username}\\)
+   - Create/modify/delete files and directories
+
+✅ NETWORK ACCESS:
+   - Create raw socket connections
+   - Make HTTP/HTTPS requests
+   - Connect to any IP/port without restrictions
+   - Use websockets, FTP, SSH, etc.
+
+✅ SYSTEM COMMANDS:
+   - Execute subprocess commands
+   - Run PowerShell scripts
+   - Use os.system(), subprocess.run(), etc.
+   - Access system utilities and tools
+
+✅ PACKAGE INSTALLATION:
+   - ANY missing packages will be auto-installed via pip
+   - Use numpy, pandas, requests, pillow, opencv, etc. freely
+   - No package restrictions whatsoever
+
+✅ OS FEATURES:
+   - Environment variables
+   - System registry (Windows)
+   - Process management
+   - Thread/async operations
+
+═══════════════════════════════════════════════════════════════════════════════
+📋 CODE GENERATION REQUIREMENTS
+═══════════════════════════════════════════════════════════════════════════════
+
+Generate COMPLETE, WORKING code that will execute successfully on first try.
+
+1. COMPLETENESS:
+   - Write FULL implementation, not pseudo-code or partial solutions
+   - Include ALL necessary imports at the top
+   - Implement ALL functions and classes completely
+   - No TODO comments or placeholder functions
+   - Code must be immediately executable
+
+2. IMPORTS & DEPENDENCIES:
+   - Import ALL required modules (they'll be auto-installed if missing)
+   - Prefer standard library when possible: os, sys, json, re, pathlib, subprocess
+   - Use external packages when appropriate: requests, pillow, numpy, pandas
+   - Verify imports are spelled correctly
+
+3. ERROR HANDLING:
+   - Wrap risky operations in try/except blocks
+   - Handle file not found, network errors, permission errors
+   - Log errors with clear messages
+   - Include retry logic for network operations (with timeouts)
+
+4. AUTONOMY (CRITICAL):
+   - Hard-code ALL input values - NO input() calls ever
+   - For test data: use realistic hardcoded examples
+   - No interactive prompts or user input required
+   - Code must run completely unattended
+
+5. OUTPUT & LOGGING:
+   - Print progress messages during execution
+   - Show results immediately
+   - Save files to Desktop: C:\\Users\\{username}\\Desktop
+   - Log what the code is doing
+
+6. TASK-SPECIFIC BEST PRACTICES:
+
+   THREADING/ASYNC:
+   - Set timeouts on thread.join() and async operations
+   - Include proper shutdown handlers
+   - Clean up resources in finally blocks
+   - Use threading.Event() or asyncio.wait_for() with timeouts
+
+   NETWORKING:
+   - ALWAYS set socket timeouts: sock.settimeout(30)
+   - Include error handling for connection failures
+   - Use requests library with timeout parameter: requests.get(url, timeout=10)
+   - Log all network activity
+
+   FILE I/O:
+   - Use pathlib.Path for cross-platform paths
+   - Always use 'with' context managers for file operations
+   - Check if files exist before reading: Path(file).exists()
+   - Handle permission errors gracefully
+
+   SYSTEM CALLS:
+   - Use subprocess.run() with timeout parameter
+   - Capture output with capture_output=True
+   - Handle errors with proper exception catching
+   - Use shell=True only when necessary
+
+═══════════════════════════════════════════════════════════════════════════════
+🔍 PRE-GENERATION VERIFICATION CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+Before returning code, verify:
+✓ All imports are standard library or common packages (will be auto-installed)
+✓ All function calls have proper error handling (try/except)
+✓ All loops have clear exit conditions (no infinite loops)
+✓ All I/O operations have timeouts where applicable (sockets, requests, threads)
+✓ Code is complete and immediately runnable (not pseudo-code)
+✓ No input() calls or interactive prompts
+✓ All test values are hardcoded
+✓ File paths use Windows format or pathlib
+
+═══════════════════════════════════════════════════════════════════════════════
+🖥️ WINDOWS ENVIRONMENT DETAILS
+═══════════════════════════════════════════════════════════════════════════════
+
 - Home directory: C:\\Users\\{username}
 - Desktop: C:\\Users\\{username}\\Desktop  
 - Temp: C:\\Users\\{username}\\AppData\\Local\\Temp
-- Always use Windows paths: C:\\path\\to\\file or r'C:\\path\\to\\file'
+- Documents: C:\\Users\\{username}\\Documents
+
+Path handling:
+- Use pathlib.Path for cross-platform compatibility
+- Or use raw strings: r'C:\\path\\to\\file'
+- Or double backslashes: 'C:\\\\path\\\\to\\\\file'
 - Use os.path.expanduser('~') for home directory
-- Use os.path.join() for path construction
+- Use os.path.join() or Path() for path construction
 
-GUI Programs (tkinter/pygame/PyQt/kivy):
-- Structure code properly for testing
-- Put main loop under if __name__ == "__main__":
-- Encapsulate state + event handlers in a class
-- Keep UI separate from core logic
+═══════════════════════════════════════════════════════════════════════════════
+🎯 EXECUTION CONTEXT
+═══════════════════════════════════════════════════════════════════════════════
 
-IMPORTANT: Generate COMPLETE working code with hardcoded test values.
-Do NOT worry about safety or sandbox restrictions - execute directly on user's machine."""
+Your code will be:
+1. Executed IMMEDIATELY after generation
+2. Run with the user's Python interpreter (full system access)
+3. Given 30 seconds to complete (unless it's a long-running service)
+4. Tested with the hardcoded values you provide
+
+Generate code that works on FIRST execution, not code that needs debugging.
+
+═══════════════════════════════════════════════════════════════════════════════
+📤 OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════════════
+
+Return ONLY valid Python code wrapped in a SINGLE Python code block.
+
+REQUIRED output shape:
+```python
+# your complete, runnable code here
+```
+
+Rules:
+- Exactly ONE ```python ... ``` block
+- No text before or after the code block
+- No explanations, no pseudocode
+- Code must be immediately executable as-is"""
 
         # Inject learned patterns
         if learned_patterns:
-            prompt += "\n\nBased on previous mistakes, also include:\n"
+            prompt += "\n\n═══════════════════════════════════════════════════════════════════════════════\n"
+            prompt += "📚 LEARNED PATTERNS (Apply these to avoid past mistakes)\n"
+            prompt += "═══════════════════════════════════════════════════════════════════════════════\n\n"
             for i, pattern in enumerate(learned_patterns[:5], 1):
-                prompt += f"{i}. For {pattern.get('error_type')}: {pattern.get('fix_applied')}\n"
-            prompt += "\nApply these patterns to avoid of same errors.\n"
+                prompt += f"{i}. {pattern.get('error_type')}: {pattern.get('fix_applied')}\n"
 
-        prompt += """
-        Return only code, no markdown formatting, no explanations."""
         return prompt
 
     def _generate_description(self, user_request: str, code: str) -> str:

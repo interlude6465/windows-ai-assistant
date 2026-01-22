@@ -156,19 +156,40 @@ class CodeStepBreakdown:
 
 {user_request}
 
+═══════════════════════════════════════════════════════════════════════════════
+🎯 STEP PLANNING GUIDELINES
+═══════════════════════════════════════════════════════════════════════════════
+
+The user has FULL SYSTEM ACCESS. Plan steps with these capabilities in mind:
+- Filesystem access, network operations, subprocess, raw sockets
+- Missing packages will be auto-installed
+- No sandbox restrictions
+
 Requirements:
 1. Create FOCUSED, SUBSTANTIAL steps (maximum 4 steps for complex tasks)
-2. Each step should accomplish something meaningful
-3. Avoid trivial setup-only steps (like "install package" or "import library")
+2. Each step should accomplish something meaningful and testable
+3. Avoid trivial setup-only steps (like "install package" - that's automatic)
 4. Combine related operations into single steps
-5. For steps that require code execution, describe what the code should do
-6. For informational steps (like "prepare", "format"), mark them accordingly
+5. Each step will be executed immediately with full system access
+6. Generated code must be COMPLETE, WORKING, and include timeouts
 
 Guidelines for reducing steps:
-- If installing libraries, do it in the code itself (try/except ImportError)
+- Package installation happens automatically - don't create steps for it
 - Don't separate "prepare URL" from "fetch data"
 - Combine validation into execution steps
-- Error handling should be part of main code, not separate steps
+- Error handling is part of each step's code, not separate
+- Include timeout and exit condition requirements in step descriptions
+
+Step descriptions should emphasize:
+- COMPLETE implementation (not partial)
+- Proper timeouts (for network, threads, I/O)
+- Error handling (try/except blocks)
+- No infinite loops (clear exit conditions)
+- Hard-coded test values (no input() calls)
+
+═══════════════════════════════════════════════════════════════════════════════
+📤 OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════════════════════
 
 CRITICAL: You MUST respond with VALID JSON only, no additional text.
 
@@ -177,7 +198,10 @@ Format:
   "steps": [
     {{
       "step_number": 1,
-      "description": "Clear description of what this step does",
+      "description": (
+        "Clear description of what this step does "
+        "(emphasize completeness and timeouts)"
+      ),
       "code_needed": true/false,
       "is_code_execution": true/false,
       "validation_method": "output_pattern" | "file_exists" | "syntax_check" | "manual",
