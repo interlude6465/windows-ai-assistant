@@ -16,6 +16,14 @@ from spectral.mistake_learner import LearningPattern, MistakeLearner
 from spectral.retry_parsing import format_attempt_progress
 from spectral.utils import AUTONOMOUS_CODE_REQUIREMENT, clean_code
 
+
+# Error classification categories
+class ErrorCategory:
+    RETRY_WORTHY = "retry_worthy"  # Actual code bugs: syntax, logic, undefined variables
+    NOT_RETRYABLE = "not_retryable"  # Environmental: permissions, missing packages, timeouts
+    MALFORMED_FIX = "malformed_fix"  # Recovery made it worse: scope issues, broken indentation
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -174,7 +182,9 @@ class AdaptiveFixEngine:
         self.retry_history: dict[str, RetryHistoryEntry] = {}
         # Track installation attempts to prevent infinite loops
         self.install_history: dict[str, int] = {}
-        logger.info("AdaptiveFixEngine initialized with unlimited retries by default")
+        # Track error history for smart retry logic
+        self.error_history: dict[str, dict[str, int]] = {}
+        logger.info("AdaptiveFixEngine initialized with smart retry logic")
 
     def install_missing_package(self, module_name: str) -> bool:
         """
@@ -241,6 +251,273 @@ class AdaptiveFixEngine:
             logger.error(f"Error installing {pip_package}: {e}")
             return False
 
+    def classify_error(self, error_type: str, error_details: str) -> str:
+        """
+        Classify error into appropriate category for smart retry logic.
+
+        Args:
+            error_type: Type of error (e.g., ImportError, SyntaxError)
+            error_details: Detailed error message
+
+        Returns:
+            Error category (ErrorCategory.RETRY_WORTHY, NOT_RETRYABLE, or MALFORMED_FIX)
+        """
+        details_lower = error_details.lower()
+
+        # NOT_RETRYABLE: Environmental issues that can't be fixed by retrying
+        if any(
+            keyword in details_lower
+            for keyword in [
+                "permission denied",
+                "access denied",
+                "winerror 5",
+                "winerror 13",
+                "administrator privileges",
+                "admin rights",
+                "elevated permissions",
+                "operation not permitted",
+                "epperm",
+                "eacces",
+            ]
+        ):
+            return ErrorCategory.NOT_RETRYABLE
+
+        # NOT_RETRYABLE: Missing packages (will be handled by auto-install)
+        if error_type in ["ModuleNotFoundError", "ImportError"]:
+            return ErrorCategory.NOT_RETRYABLE
+
+        # NOT_RETRYABLE: Timeouts and hangs (likely infinite loops)
+        if any(
+            keyword in details_lower
+            for keyword in ["timeout", "timed out", "hang", "unresponsive", "not responding"]
+        ):
+            return ErrorCategory.NOT_RETRYABLE
+
+        # NOT_RETRYABLE: System resource issues
+        if any(
+            keyword in details_lower
+            for keyword in [
+                "out of memory",
+                "memory error",
+                "disk full",
+                "no space left",
+                "too many open files",
+                "resource exhausted",
+            ]
+        ):
+            return ErrorCategory.NOT_RETRYABLE
+
+        # MALFORMED_FIX: Recovery attempts that made things worse
+        if any(
+            keyword in details_lower
+            for keyword in [
+                "not defined",
+                "undefined variable",
+                "name '" in details_lower and "' is not defined" in details_lower,
+                "unexpected indent",
+                "unindent does not match",
+                "invalid syntax",
+                "missing colon",
+                "missing parenthesis",
+                "missing bracket",
+                "out of scope",
+                "referenced before assignment",
+            ]
+        ):
+            return ErrorCategory.MALFORMED_FIX
+
+        # RETRY_WORTHY: Actual code bugs that can be fixed
+        if error_type in ["SyntaxError", "IndentationError", "TabError"]:
+            return ErrorCategory.RETRY_WORTHY
+
+        if any(
+            keyword in details_lower
+            for keyword in [
+                "logic error",
+                "algorithm error",
+                "wrong result",
+                "incorrect output",
+                "type error",
+                "value error",
+                "index error",
+                "key error",
+                "attribute error",
+                "name error",
+                "zero division",
+            ]
+        ):
+            return ErrorCategory.RETRY_WORTHY
+
+        # Default: Assume retry-worthy if we're not sure
+        return ErrorCategory.RETRY_WORTHY
+
+    def _handle_not_retryable_error(self, error_type: str, error_details: str) -> FailureDiagnosis:
+        """
+        Handle NOT_RETRYABLE errors with appropriate responses.
+
+        Args:
+            error_type: Type of error
+            error_details: Detailed error message
+
+        Returns:
+            FailureDiagnosis with appropriate response
+        """
+        details_lower = error_details.lower()
+
+        # Permission/privilege errors
+        if any(
+            keyword in details_lower
+            for keyword in [
+                "permission denied",
+                "access denied",
+                "winerror 5",
+                "winerror 13",
+                "administrator privileges",
+                "admin rights",
+                "elevated permissions",
+                "operation not permitted",
+                "epperm",
+                "eacces",
+            ]
+        ):
+            return FailureDiagnosis(
+                error_type=error_type,
+                error_details=error_details,
+                root_cause="Permission/privilege error - requires admin rights",
+                suggested_fix="This operation requires administrator privileges. Run as admin or choose a different approach.",
+                fix_strategy="abort",
+                confidence=1.0,
+            )
+
+        # Missing packages (will be auto-installed by DirectCodeRunner)
+        if error_type in ["ModuleNotFoundError", "ImportError"]:
+            module_name = self._extract_module_name_from_error(error_details)
+            if module_name:
+                return FailureDiagnosis(
+                    error_type=error_type,
+                    error_details=error_details,
+                    root_cause=f"Missing package '{module_name}' - will be auto-installed",
+                    suggested_fix=f"Package {module_name} will be automatically installed by the direct executor",
+                    fix_strategy="skip_retry",
+                    confidence=1.0,
+                )
+            else:
+                return FailureDiagnosis(
+                    error_type=error_type,
+                    error_details=error_details,
+                    root_cause="Missing package - unable to extract package name",
+                    suggested_fix="Manual installation required",
+                    fix_strategy="abort",
+                    confidence=0.8,
+                )
+
+        # Timeout/hang errors
+        if any(
+            keyword in details_lower
+            for keyword in ["timeout", "timed out", "hang", "unresponsive", "not responding"]
+        ):
+            return FailureDiagnosis(
+                error_type=error_type,
+                error_details=error_details,
+                root_cause="Code execution timed out - likely infinite loop or long-running operation",
+                suggested_fix="Check for infinite loops or optimize long-running operations",
+                fix_strategy="abort",
+                confidence=0.9,
+            )
+
+        # System resource errors
+        if any(
+            keyword in details_lower
+            for keyword in [
+                "out of memory",
+                "memory error",
+                "disk full",
+                "no space left",
+                "too many open files",
+                "resource exhausted",
+            ]
+        ):
+            return FailureDiagnosis(
+                error_type=error_type,
+                error_details=error_details,
+                root_cause="System resource error - insufficient memory, disk space, or file handles",
+                suggested_fix="Free up system resources or optimize memory usage",
+                fix_strategy="abort",
+                confidence=0.9,
+            )
+
+        # Default NOT_RETRYABLE response
+        return FailureDiagnosis(
+            error_type=error_type,
+            error_details=error_details,
+            root_cause="Non-retryable error - environmental or system issue",
+            suggested_fix="This error cannot be fixed by retrying. Manual intervention required.",
+            fix_strategy="abort",
+            confidence=0.8,
+        )
+
+    def _handle_malformed_fix_error(self, error_type: str, error_details: str) -> FailureDiagnosis:
+        """
+        Handle MALFORMED_FIX errors where recovery made things worse.
+
+        Args:
+            error_type: Type of error
+            error_details: Detailed error message
+
+        Returns:
+            FailureDiagnosis with appropriate response
+        """
+        return FailureDiagnosis(
+            error_type=error_type,
+            error_details=error_details,
+            root_cause="Recovery attempt created new errors - malformed fix detected",
+            suggested_fix="The automated fix made things worse. Need complete code regeneration, not patching.",
+            fix_strategy="abort",
+            confidence=0.9,
+        )
+
+    def _diagnose_retry_worthy_error(
+        self,
+        step: CodeStep,
+        error_type: str,
+        error_details: str,
+        original_output: str,
+    ) -> FailureDiagnosis:
+        """
+        Diagnose RETRY_WORTHY errors using LLM for actual code bugs.
+
+        Args:
+            step: The failed CodeStep
+            error_type: Type of error
+            error_details: Detailed error message
+            original_output: Full output from failed execution
+
+        Returns:
+            FailureDiagnosis with root cause and suggested fix
+        """
+        prompt = self._build_diagnosis_prompt(step, error_type, error_details, original_output)
+
+        try:
+            response = self.llm_client.generate(prompt)
+            logger.debug(f"Diagnosis response received: {len(response)} characters")
+
+            # Parse response into FailureDiagnosis
+            diagnosis = self._parse_diagnosis_response(response, error_type, error_details)
+            logger.info(f"Diagnosis complete: {diagnosis.root_cause}")
+
+            return diagnosis
+        except Exception as e:
+            logger.error(f"Failed to diagnose failure: {e}")
+            # Return fallback diagnosis
+            return FailureDiagnosis(
+                error_type=error_type,
+                error_details=error_details,
+                root_cause=f"Unable to diagnose: {str(e)}",
+                suggested_fix="Manual intervention required",
+                fix_strategy="manual",
+                confidence=0.3,
+            )
+
     def diagnose_failure(
         self,
         step: CodeStep,
@@ -249,7 +526,7 @@ class AdaptiveFixEngine:
         original_output: str,
     ) -> FailureDiagnosis:
         """
-        Use LLM to understand failure and suggest fix.
+        Use smart error classification to understand failure and suggest appropriate fix.
 
         Args:
             step: The failed CodeStep
@@ -262,35 +539,20 @@ class AdaptiveFixEngine:
         """
         logger.info(f"Diagnosing failure for step {step.step_number}: {error_type}")
 
-        # Handle ModuleNotFoundError and ImportError with auto-installation
-        if error_type in ["ModuleNotFoundError", "ImportError"]:
-            module_name = self._extract_module_name_from_error(error_details)
-            if module_name:
-                logger.info(f"Detected missing module: {module_name}")
+        # Classify the error first
+        error_category = self.classify_error(error_type, error_details)
+        logger.info(f"Error classified as: {error_category}")
 
-                # Try to install the package
-                install_success = self.install_missing_package(module_name)
+        # Handle NOT_RETRYABLE errors immediately
+        if error_category == ErrorCategory.NOT_RETRYABLE:
+            return self._handle_not_retryable_error(error_type, error_details)
 
-                if install_success:
-                    logger.info(f"Successfully installed {module_name}, retrying execution")
-                    return FailureDiagnosis(
-                        error_type=error_type,
-                        error_details=error_details,
-                        root_cause=f"Missing module '{module_name}' - now installed",
-                        suggested_fix="Module installed, retry original code",
-                        fix_strategy="retry_after_install",
-                        confidence=0.9,
-                    )
-                else:
-                    logger.warning(f"Failed to install {module_name}")
-                    return FailureDiagnosis(
-                        error_type=error_type,
-                        error_details=error_details,
-                        root_cause=f"Missing module '{module_name}' - installation failed",
-                        suggested_fix=f"Manual installation required: pip install {module_name}",
-                        fix_strategy="manual",
-                        confidence=0.8,
-                    )
+        # Handle MALFORMED_FIX errors immediately
+        if error_category == ErrorCategory.MALFORMED_FIX:
+            return self._handle_malformed_fix_error(error_type, error_details)
+
+        # Handle RETRY_WORTHY errors with LLM diagnosis
+        return self._diagnose_retry_worthy_error(step, error_type, error_details, original_output)
 
         prompt = self._build_diagnosis_prompt(step, error_type, error_details, original_output)
 
@@ -445,15 +707,29 @@ class AdaptiveFixEngine:
         self,
         step_number: int,
         error_type: str,
+        error_details: str,
         retry_count: int,
         fix_strategy: str,
         max_retries: Optional[int] = None,
     ) -> bool:
-        """Determine if we should abort retry attempts.
+        """Determine if we should abort retry attempts using smart logic.
 
-        Always tracks repeated errors to prevent infinite loops, even when max_retries is None.
+        Implements aggressive retry limits and early abort for non-retryable errors.
         """
-        # Track repeated errors regardless of max_retries
+        # Classify the error to determine if it's even retry-worthy
+        error_category = self.classify_error(error_type, error_details)
+
+        # Abort immediately for NOT_RETRYABLE errors
+        if error_category == ErrorCategory.NOT_RETRYABLE:
+            logger.warning(f"Aborting retry for NOT_RETRYABLE error: {error_type}")
+            return True
+
+        # Abort immediately for MALFORMED_FIX errors
+        if error_category == ErrorCategory.MALFORMED_FIX:
+            logger.warning(f"Aborting retry for MALFORMED_FIX error: {error_type}")
+            return True
+
+        # Track repeated errors to detect no progress
         key = f"{step_number}:{error_type}"
         if key not in self.retry_history:
             self.retry_history[key] = {"count": 0, "last_fix_strategy": None}
@@ -461,21 +737,18 @@ class AdaptiveFixEngine:
         self.retry_history[key]["count"] += 1
         self.retry_history[key]["last_fix_strategy"] = fix_strategy
 
-        # Abort if same error repeats 3+ times
-        if self.retry_history[key]["count"] >= 3:
+        # Abort if same error repeats 2+ times (no progress detection)
+        if self.retry_history[key]["count"] >= 2:
             logger.warning(
-                f"Same error ({error_type}) repeated 3+ times on step {step_number}, aborting"
+                f"Same error ({error_type}) repeated 2+ times on step {step_number} - no progress, aborting"
             )
             return True
 
-        # Hard limit: never exceed 5 retries for direct execution (reduced from 25)
-        if retry_count >= 5:
-            logger.warning(f"Hard limit of 5 retries exceeded for step {step_number}")
-            return True
+        # Aggressive limit: max 3-5 retries (reduced from 15)
+        # Use 3 for most cases, allow up to 5 for complex scenarios
+        effective_max = min(5, max_retries or 3)
 
-        # Check user-specified max_retries if provided
-        effective_max = self.default_max_retries if max_retries is None else max_retries
-        if effective_max is not None and retry_count >= effective_max:
+        if retry_count >= effective_max:
             logger.warning(f"Max retries ({effective_max}) exceeded for step {step_number}")
             return True
 

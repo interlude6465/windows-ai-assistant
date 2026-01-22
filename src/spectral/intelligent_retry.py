@@ -21,7 +21,7 @@ class RetryDecision:
 
 
 class IntelligentRetryManager:
-    def __init__(self, max_retries: int = 5, error_repeat_threshold: int = 3) -> None:
+    def __init__(self, max_retries: int = 3, error_repeat_threshold: int = 2) -> None:
         if max_retries <= 0:
             raise ValueError("max_retries must be > 0")
         if error_repeat_threshold <= 1:
