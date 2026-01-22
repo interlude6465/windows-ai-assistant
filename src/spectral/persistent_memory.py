@@ -9,7 +9,7 @@ import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from spectral.conversation_backend import ConversationBackend
 from spectral.json_backend import JSONBackend
@@ -213,7 +213,7 @@ class MemoryModule:
         Returns:
             List of all memory entries
         """
-        return self.backend.list_all()
+        return cast(List[MemoryEntry], self.backend.list_all())
 
     def get_memories_by_category(self, category: str) -> List[MemoryEntry]:
         """
@@ -225,7 +225,7 @@ class MemoryModule:
         Returns:
             List of matching memory entries
         """
-        return self.backend.query(category=category)
+        return cast(List[MemoryEntry], self.backend.query(category=category))
 
     def get_memories_by_entity(
         self, entity_type: str, entity_id: Optional[str] = None
@@ -240,7 +240,10 @@ class MemoryModule:
         Returns:
             List of matching memory entries
         """
-        return self.backend.query(entity_type=entity_type, entity_id=entity_id)
+        return cast(
+            List[MemoryEntry],
+            self.backend.query(entity_type=entity_type, entity_id=entity_id),
+        )
 
     def get_memories_by_tags(self, tags: List[str]) -> List[MemoryEntry]:
         """
@@ -252,7 +255,7 @@ class MemoryModule:
         Returns:
             List of matching memory entries
         """
-        return self.backend.query(tags=tags)
+        return cast(List[MemoryEntry], self.backend.query(tags=tags))
 
     def get_memory_by_key(self, key: str) -> Optional[MemoryEntry]:
         """
@@ -288,12 +291,15 @@ class MemoryModule:
         Returns:
             List of matching memory entries
         """
-        return self.backend.query(
-            category=category,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            tags=tags,
-            key=key,
+        return cast(
+            List[MemoryEntry],
+            self.backend.query(
+                category=category,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                tags=tags,
+                key=key,
+            ),
         )
 
     def get_user_preferences(self) -> Dict[str, Any]:
@@ -323,7 +329,7 @@ class MemoryModule:
         existing = self.get_memory_by_key(key)
         if existing:
             self.update_memory(existing.id, value, module="preferences_manager")
-            return existing.id
+            return str(existing.id)
         else:
             return self.create_memory(
                 category="preferences",
@@ -356,7 +362,7 @@ class MemoryModule:
         existing = self.get_memory_by_key("device_info")
         if existing:
             self.update_memory(existing.id, device_info, module="device_manager")
-            return existing.id
+            return str(existing.id)
         else:
             return self.create_memory(
                 category="devices",
@@ -509,13 +515,14 @@ class MemoryModule:
             Execution ID
         """
         execution_id = str(uuid.uuid4())
+        clean_file_locations = [str(loc) for loc in (file_locations or []) if loc]
         execution = ExecutionMemory(
             execution_id=execution_id,
             timestamp=datetime.now(),
             user_request=user_request,
             description=description,
             code_generated=code_generated,
-            file_locations=file_locations or [],
+            file_locations=clean_file_locations,
             output=output,
             success=success,
             tags=tags or [],

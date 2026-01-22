@@ -7,9 +7,9 @@ to enable Spectral to remember past interactions across sessions.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,35 @@ class ExecutionMemory(BaseModel):
     file_locations: List[str] = Field(default_factory=list, description="Where files were created")
     output: str = Field(description="Execution output")
     success: bool = Field(description="Whether execution succeeded")
+
+    @field_validator("file_locations", mode="before")
+    @classmethod
+    def _normalize_file_locations(cls, v: Any) -> List[str]:
+        if v is None:
+            return []
+
+        if isinstance(v, str):
+            return [v] if v else []
+
+        if isinstance(v, (list, tuple)):
+            cleaned: List[str] = []
+            for item in v:
+                if item is None:
+                    continue
+                if isinstance(item, str):
+                    if item:
+                        cleaned.append(item)
+                    continue
+                try:
+                    item_str = str(item)
+                except Exception:
+                    continue
+                if item_str:
+                    cleaned.append(item_str)
+            return cleaned
+
+        return []
+
     tags: List[str] = Field(
         default_factory=list,
         description="Tags for categorization: web_scraper, file_io, etc.",

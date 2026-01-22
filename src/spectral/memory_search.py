@@ -99,6 +99,15 @@ class MemorySearch:
                 # description, code_generated, file_locations, output,
                 # success, tags, execution_time_ms, error_message
 
+                raw_file_locations = data.get("file_locations")
+                if not raw_file_locations:
+                    raw_file_locations = [data.get("desktop_path"), data.get("sandbox_path")]
+
+                if isinstance(raw_file_locations, (list, tuple)):
+                    file_locations = [str(loc) for loc in raw_file_locations if loc]
+                else:
+                    file_locations = [str(raw_file_locations)] if raw_file_locations else []
+
                 exec_mem = ExecutionMemory(
                     execution_id=data.get("run_id", meta_file.stem),
                     timestamp=datetime.fromisoformat(
@@ -107,14 +116,21 @@ class MemorySearch:
                     user_request=data.get("prompt", ""),
                     description=f"Generated {data.get('filename', 'main.py')}",
                     code_generated=data.get("code", ""),
-                    file_locations=[data.get("desktop_path", ""), data.get("sandbox_path", "")],
+                    file_locations=file_locations,
                     output=data.get("execution_output", ""),
                     success=data.get("execution_status") == "success",
                     tags=["metadata_load"],
                     error_message=data.get("execution_error") or data.get("last_error"),
                 )
-                # Clean up empty file locations
-                exec_mem.file_locations = [loc for loc in exec_mem.file_locations if loc]
+
+                # Optional self-heal: persist cleaned file_locations back to disk
+                if data.get("file_locations") != file_locations:
+                    try:
+                        data["file_locations"] = file_locations
+                        with open(meta_file, "w", encoding="utf-8") as f:
+                            json.dump(data, f, indent=2)
+                    except Exception:
+                        pass
 
                 executions.append(exec_mem)
             except Exception as e:

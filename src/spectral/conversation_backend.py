@@ -437,10 +437,15 @@ class ConversationBackend:
             cursor.execute(sql, (f"%{description}%",))
 
             rows = cursor.fetchall()
-            locations = []
+            locations: List[str] = []
             for row in rows:
-                file_locs = json.loads(row["file_locations"])
-                locations.extend(file_locs)
+                try:
+                    file_locs = json.loads(row["file_locations"]) if row["file_locations"] else []
+                except Exception:
+                    file_locs = []
+
+                if isinstance(file_locs, list):
+                    locations.extend([str(loc) for loc in file_locs if loc])
 
             return locations
         except Exception as e:
@@ -507,13 +512,23 @@ class ConversationBackend:
         except KeyError:
             error_message = None
 
+        try:
+            raw_file_locations = json.loads(row["file_locations"]) if row["file_locations"] else []
+        except Exception:
+            raw_file_locations = []
+
+        if isinstance(raw_file_locations, list):
+            file_locations = [str(loc) for loc in raw_file_locations if loc]
+        else:
+            file_locations = []
+
         return ExecutionMemory(
             execution_id=row["id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
             user_request=row["user_request"],
             description=row["description"],
             code_generated=code_generated,
-            file_locations=json.loads(row["file_locations"]),
+            file_locations=file_locations,
             output=row["output"],
             success=bool(row["success"]),
             tags=json.loads(row["tags"]),
