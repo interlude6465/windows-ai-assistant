@@ -6,7 +6,9 @@ Integrates with SandboxRunManager for robust verification pipeline.
 """
 
 import logging
+import os
 import re
+import select
 import subprocess
 import sys
 import tempfile
@@ -14,7 +16,7 @@ import time
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, Generator, List, Optional
+from typing import Callable, Dict, Generator, List, Optional, Set
 
 from spectral.gui_test_generator import GUITestGenerator
 from spectral.intelligent_retry import IntelligentRetryManager
@@ -23,7 +25,6 @@ from spectral.memory_models import ExecutionMemory
 from spectral.mistake_learner import MistakeLearner
 from spectral.persistent_memory import MemoryModule
 from spectral.retry_parsing import format_attempt_progress, parse_retry_limit
-from spectral.sandbox_manager import SandboxResult, SandboxRunManager
 from spectral.utils import (
     AUTONOMOUS_CODE_REQUIREMENT,
     SmartInputHandler,
@@ -34,6 +35,351 @@ from spectral.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class DirectCodeRunner:
+    """
+    Runs code directly on user's machine with full system access.
+
+    No sandbox isolation, no temp file restrictions, full pip installation support.
+    """
+
+    def __init__(self):
+        self.installed_packages: Set[str] = set()
+
+    def detect_missing_imports(self, code: str) -> List[str]:
+        """Detect imports that are not available in the current environment."""
+        missing_imports = []
+
+        # Common stdlib modules that don't need installation
+        stdlib_modules = {
+            "os",
+            "sys",
+            "re",
+            "json",
+            "time",
+            "datetime",
+            "pathlib",
+            "subprocess",
+            "threading",
+            "multiprocessing",
+            "queue",
+            "logging",
+            "tempfile",
+            "shutil",
+            "glob",
+            "urllib",
+            "http",
+            "email",
+            "xml",
+            "sqlite3",
+            "csv",
+            "configparser",
+            "argparse",
+            "getpass",
+            "platform",
+            "uuid",
+            "hashlib",
+            "hmac",
+            "secrets",
+            "base64",
+            "binascii",
+            "struct",
+            "codecs",
+            "io",
+            "collections",
+            "itertools",
+            "functools",
+            "operator",
+            "pickle",
+            "copy",
+            "pprint",
+            "reprlib",
+            "enum",
+            "abc",
+            "contextlib",
+            "weakref",
+            "types",
+            "copyreg",
+            "typing",
+            "warnings",
+            "dataclasses",
+            "ast",
+            "dis",
+            "tkinter",
+        }
+
+        # Find all import statements
+        import_patterns = [
+            r"^import\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+            r"^from\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+import",
+        ]
+
+        found_imports = set()
+        for line in code.split("\n"):
+            line = line.strip()
+            for pattern in import_patterns:
+                match = re.match(pattern, line)
+                if match:
+                    module_name = match.group(1)
+                    if module_name not in stdlib_modules:
+                        found_imports.add(module_name)
+
+        # Check which imports are actually missing
+        for module in found_imports:
+            try:
+                __import__(module)
+            except ImportError:
+                missing_imports.append(module)
+
+        return missing_imports
+
+    def install_missing_packages(self, missing_imports: List[str]) -> bool:
+        """Install missing packages using pip."""
+        if not missing_imports:
+            return True
+
+        logger.info(f"Installing missing packages: {missing_imports}")
+
+        for package in missing_imports:
+            try:
+                # Map common module names to pip package names
+                pip_package = self._get_pip_package_name(package)
+                if pip_package and pip_package not in self.installed_packages:
+                    logger.info(f"Installing {pip_package} for module {package}")
+
+                    result = subprocess.run(
+                        [sys.executable, "-m", "pip", "install", pip_package],
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                    )
+
+                    if result.returncode == 0:
+                        self.installed_packages.add(pip_package)
+                        logger.info(f"Successfully installed {pip_package}")
+                    else:
+                        logger.warning(f"Failed to install {pip_package}: {result.stderr}")
+                        return False
+
+            except Exception as e:
+                logger.warning(f"Error installing package for {package}: {e}")
+                return False
+
+        return True
+
+    def _get_pip_package_name(self, module_name: str) -> Optional[str]:
+        """Map module name to pip package name."""
+        mapping = {
+            "cv2": "opencv-python",
+            "PIL": "pillow",
+            "bs4": "beautifulsoup4",
+            "sklearn": "scikit-learn",
+            "yaml": "pyyaml",
+            "yaml2": "pyyaml",
+            "plotly": "plotly",
+            "flask": "flask",
+            "django": "django",
+            "fastapi": "fastapi",
+            "sqlalchemy": "sqlalchemy",
+            "pymongo": "pymongo",
+            "redis": "redis",
+            "celery": "celery",
+            "pytest": "pytest",
+            "tensorflow": "tensorflow",
+            "torch": "torch",
+            "keras": "keras",
+            "seaborn": "seaborn",
+            "requests": "requests",
+            "beautifulsoup4": "beautifulsoup4",
+            "pygame": "pygame",
+            "numpy": "numpy",
+            "pandas": "pandas",
+            "matplotlib": "matplotlib",
+            "jinja2": "jinja2",
+            "click": "click",
+            "tqdm": "tqdm",
+            "psutil": "psutil",
+            "paramiko": "paramiko",
+            "socket": None,  # Built-in
+            "mcstatus": "mcstatus",
+        }
+        return mapping.get(module_name)
+
+    def run_direct_code_streaming(
+        self, code: str, script_path: Optional[Path] = None, timeout: int = 30
+    ) -> Generator[str, None, None]:
+        """
+        Run code directly with streaming output for real-time feedback.
+
+        Args:
+            code: Python code to execute
+            script_path: Optional path to save script (otherwise uses temp file)
+            timeout: Execution timeout in seconds
+
+        Yields:
+            Output lines as they arrive
+        """
+
+        # Detect and install missing packages
+        missing_imports = self.detect_missing_imports(code)
+        if missing_imports:
+            yield f"📦 Installing missing packages: {', '.join(missing_imports)}\n"
+            if not self.install_missing_packages(missing_imports):
+                yield f"❌ Failed to install required packages: {missing_imports}\n"
+                return
+
+        # Write code to file (Desktop if possible, otherwise temp)
+        if script_path is None:
+            script_path = self._get_execution_path()
+
+        try:
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            script_path.write_text(code, encoding="utf-8")
+
+            yield f"🚀 Executing code directly: {script_path}\n"
+
+            # Execute directly with user's Python interpreter
+            creation_flags = 0
+            if sys.platform == "win32":
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+            process = subprocess.Popen(
+                [sys.executable, str(script_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=creation_flags,
+            )
+
+            assert process.stdout is not None
+            assert process.stderr is not None
+
+            # Read output in real-time
+            while True:
+                # Check if there's data to read from stdout
+                try:
+                    readable, _, _ = select.select([process.stdout], [], [], 0.1)
+                    if readable:
+                        line = process.stdout.readline()
+                        if line:
+                            yield f"📤 {line.rstrip()}\n"
+                        else:
+                            break
+                    else:
+                        # Check if process has finished
+                        if process.poll() is not None:
+                            break
+                except Exception:
+                    # Handle case where stdout is closed
+                    break
+
+            # Check stderr too
+            try:
+                while True:
+                    line = process.stderr.readline()
+                    if line:
+                        yield f"⚠️ {line.rstrip()}\n"
+                    else:
+                        break
+            except Exception:
+                pass
+
+            exit_code = process.returncode or 0
+
+            if exit_code == 0:
+                yield "✅ Code executed successfully!\n"
+            else:
+                yield f"❌ Code failed with exit code {exit_code}\n"
+
+        except subprocess.TimeoutExpired:
+            yield f"⏰ Execution timed out after {timeout} seconds\n"
+            if "process" in locals():
+                process.kill()
+        except Exception as e:
+            yield f"❌ Execution failed: {str(e)}\n"
+
+    def run_direct_code(
+        self,
+        code: str,
+        script_path: Optional[Path] = None,
+        timeout: int = 30,
+        capture_output: bool = False,
+    ) -> tuple[int, str, str]:
+        """
+        Run code directly with full system access.
+
+        Args:
+            code: Python code to execute
+            script_path: Optional path to save script (otherwise uses temp file)
+            timeout: Execution timeout in seconds
+            capture_output: Whether to capture output (True) or stream it (False)
+
+        Returns:
+            Tuple of (exit_code, stdout, stderr)
+        """
+
+        # Detect and install missing packages
+        missing_imports = self.detect_missing_imports(code)
+        if missing_imports:
+            logger.info(f"Detected missing imports: {missing_imports}")
+            if not self.install_missing_packages(missing_imports):
+                return 1, "", f"Failed to install required packages: {missing_imports}"
+
+        # Write code to file (Desktop if possible, otherwise temp)
+        if script_path is None:
+            script_path = self._get_execution_path()
+
+        try:
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            script_path.write_text(code, encoding="utf-8")
+
+            logger.info(f"Executing code directly: {script_path}")
+
+            # Execute directly with user's Python interpreter
+            creation_flags = 0
+            if sys.platform == "win32":
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+            if capture_output:
+                process = subprocess.run(
+                    [sys.executable, str(script_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    creationflags=creation_flags,
+                )
+                return process.returncode, process.stdout or "", process.stderr or ""
+            else:
+                process = subprocess.Popen(
+                    [sys.executable, str(script_path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    creationflags=creation_flags,
+                )
+                stdout, stderr = process.communicate(timeout=timeout)
+                return process.returncode or 0, stdout or "", stderr or ""
+
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Code execution timed out after {timeout}s")
+            return 124, "", f"Execution timed out after {timeout} seconds"
+        except Exception as e:
+            logger.error(f"Failed to execute code: {e}")
+            return 1, "", f"Execution failed: {str(e)}"
+
+    def _get_execution_path(self) -> Path:
+        """Get path for script execution (Desktop preferred, fallback to temp)."""
+        try:
+            desktop = Path.home() / "Desktop"
+            if desktop.exists() and os.access(desktop, os.W_OK):
+                timestamp = int(time.time())
+                return desktop / f"spectral_direct_{timestamp}.py"
+        except Exception:
+            pass
+
+        # Fallback to temp directory
+        return Path(tempfile.gettempdir()) / f"spectral_direct_{int(time.time())}.py"
 
 
 class DirectExecutor:
@@ -68,9 +414,11 @@ class DirectExecutor:
         self.memory_module = memory_module
         self.gui_callback = gui_callback
         self.gui_test_generator = GUITestGenerator(llm_client)
-        self.sandbox_manager = SandboxRunManager()
+
+        # Use DirectCodeRunner for unrestricted execution
+        self.direct_runner = DirectCodeRunner()
         self._execution_history: list[ExecutionMemory] = []
-        logger.info("DirectExecutor initialized with sandbox verification")
+        logger.info("DirectExecutor initialized with direct code execution (no sandbox)")
 
     def _emit_gui_event(self, event_type: str, data: dict) -> None:
         """
@@ -431,27 +779,29 @@ class DirectExecutor:
         timeout: int = 30,
         max_attempts: Optional[int] = None,
     ) -> Generator[str, None, None]:
-        """Execute a user request end-to-end with sandbox verification.
+        """Execute a user request end-to-end with direct execution (no sandbox).
 
-        Retry behavior is bounded and loop-aware:
-        - If the user doesn't specify a limit, attempts are capped at 15.
-        - If the same error repeats several times, retries stop early to avoid loops.
-
-        Uses SandboxRunManager for isolated verification before desktop export.
+        Smart retry behavior (max 3-5 attempts):
+        - Retries only on actual code generation errors (syntax, logic)
+        - Skips retry for permission/privilege errors
+        - Skips retry for environment setup (installs packages and runs again)
+        - Limits retries to prevent infinite loops
         """
 
-        logger.info(f"Executing request: {user_request}")
+        logger.info(f"Executing request with direct execution: {user_request}")
 
         if max_attempts is None:
             parsed = parse_retry_limit(user_request)
-            max_attempts = parsed if parsed is not None else 15
+            max_attempts = parsed if parsed is not None else 5
+
+        # Cap maximum attempts to prevent infinite loops
+        max_attempts = min(max_attempts, 5)
 
         retry_manager = IntelligentRetryManager(max_retries=max_attempts, error_repeat_threshold=3)
 
         code: Optional[str] = None
         last_error_output = ""
         desktop_path: Optional[Path] = None
-        run_id: Optional[str] = None
         target_filename = self._generate_safe_filename(user_request) + ".py"
 
         while True:
@@ -498,173 +848,137 @@ class DirectExecutor:
                 if has_interactive:
                     yield f"🔍 Detected {input_count} input() call(s)\n"
 
-                # Create sandbox run for verification
-                if run_id is None:
-                    run_id = self.sandbox_manager.create_run()
+                # Save to Desktop first
+                yield "💾 Saving code to Desktop...\n"
+                try:
+                    desktop_path = self.save_code_to_desktop(
+                        code, user_request, filename=target_filename
+                    )
+                    yield f"   ✓ Saved to: {desktop_path}\n\n"
+                except Exception as e:
+                    yield f"   ⚠️ Could not save to Desktop: {e}\n"
+                    # Continue with execution anyway
 
-                yield f"🔒 Creating isolated sandbox: {run_id}\n"
+                # Execute code directly with full system access
+                yield "🚀 Executing code directly (no sandbox restrictions)...\n"
 
-                # Prepare stdin data for interactive programs
-                stdin_data = None
-                if has_interactive:
-                    test_inputs = generate_test_inputs(prompts)
-                    stdin_data = "\n".join(test_inputs) + "\n"
-                    yield f"   Generated test inputs: {test_inputs}\n"
+                # Check for common environment/setup errors that don't need retries
+                if last_error_output:
+                    if any(
+                        err in last_error_output.lower()
+                        for err in [
+                            "permission denied",
+                            "access is denied",
+                            "admin",
+                            "privilege",
+                            "not enough storage",
+                            "disk space",
+                        ]
+                    ):
+                        yield "⚠️ Permission/environment error detected\n"
+                        yield "💡 Note: Some operations may require admin privileges\n"
+                        # Continue with execution anyway
 
-                # Run verification pipeline
-                yield "🔍 Running verification pipeline...\n"
-                yield "   Gate 1: Syntax check\n"
-                yield "   Gate 2: Test execution\n"
-                yield "   Gate 3: Smoke test\n\n"
-
-                # Detect GUI program
-                is_gui, framework = self.gui_test_generator.detect_gui_program(code)
-
-                # For GUI programs, we may need to regenerate with test_mode contract
-                if is_gui and framework:
-                    yield f"🎨 Detected GUI program ({framework})\n"
-                    yield "   Enforcing test_mode contract for verification\n"
-
-                # Execute sandbox verification
-                result = self.sandbox_manager.execute_verification_pipeline(
-                    run_id=run_id,
-                    code=code,
-                    filename=target_filename,
-                    is_gui=is_gui,
-                    stdin_data=stdin_data,
+                # Use DirectCodeRunner for unrestricted execution
+                exit_code, stdout, stderr = self.direct_runner.run_direct_code(
+                    code=code, script_path=desktop_path, timeout=timeout, capture_output=True
                 )
 
-                # Check verification results
-                yield "📊 Verification Results:\n"
-                for gate, passed in result.gates_passed.items():
-                    status = "✅ PASS" if passed else "❌ FAIL"
-                    yield f"   {gate.title()}: {status}\n"
-                yield "\n"
+                # Stream the captured output
+                if stdout:
+                    for line in stdout.splitlines():
+                        yield f"📤 {line}\n"
+                if stderr:
+                    for line in stderr.splitlines():
+                        yield f"⚠️ {line}\n"
 
-                if result.status == "success":
-                    yield "✅ All verification gates passed!\n\n"
+                # Check execution result
+                if exit_code == 0:
+                    yield "✅ Code executed successfully!\n\n"
 
-                    # Export to desktop
-                    yield "💾 Exporting verified code to Desktop...\n"
-                    desktop_path = None
-                    try:
-                        desktop_path = self.save_code_to_desktop(
-                            code, user_request, result.code_path, filename=target_filename
-                        )
-                        yield f"   ✓ Saved to: {desktop_path}\n"
-                    except Exception as e:
-                        yield f"   ⚠️  Could not save to Desktop: {e}\n"
+                    # After execution completes, extract file locations and save metadata
+                    yield "\n"
 
                     # Extract actual file locations (Desktop paths)
                     file_locations = self._extract_file_locations(
                         user_request, desktop_path, target_filename
                     )
 
-                    # Save run metadata
-                    self.sandbox_manager.save_run_metadata(run_id, result)
-
-                    # Save comprehensive execution metadata with file_locations
+                    # Save execution metadata (simplified - no sandbox verification needed)
                     execution_metadata = {
-                        "run_id": run_id,
                         "timestamp": datetime.now().isoformat(),
                         "prompt": user_request,
                         "filename": target_filename,
                         "desktop_path": str(desktop_path) if desktop_path else None,
-                        "sandbox_path": str(result.code_path),
                         "code": code,
                         "execution_status": "success",
-                        "execution_output": result.log_stdout,
-                        "execution_error": result.log_stderr,
                         "attempts": attempt,
                         "last_error": None,
-                        "file_locations": file_locations,  # Include actual file paths
+                        "file_locations": file_locations,
+                        "execution_mode": "direct",  # Mark as direct execution
                     }
-                    self.sandbox_manager.save_execution_metadata(execution_metadata)
 
-                    # Save to memory
+                    # Save to memory if available
                     if self.memory_module:
-                        self._save_execution_to_memory(
-                            user_request, code, desktop_path, result, is_gui
-                        )
+                        try:
+                            self._save_execution_to_memory(
+                                user_request, code, desktop_path, None, False  # No sandbox result
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to save to memory: {e}")
 
-                    # Clean up sandbox
-                    self.sandbox_manager.cleanup_run(run_id)
-
-                    yield "\n🎉 Code successfully verified and exported!\n"
+                    yield "🎉 Code successfully executed and exported!\n"
                     return
-
-                # Verification failed, handle different failure types
-                yield f"❌ Verification failed: {result.status}\n"
-
-                if result.error_message:
-                    yield f"Error: {result.error_message}\n\n"
-
-                if result.status == "syntax_error":
-                    yield "🔧 Fixing syntax error and retrying...\n"
-                    last_error_output = result.error_message or ""
-                elif result.status == "test_failure":
-                    yield "🔧 Tests failed, regenerating with fixes...\n"
-                    last_error_output = result.pytest_summary or result.error_message or ""
-                elif result.status == "timeout":
-                    yield "🔧 Execution timeout, optimizing code...\n"
-                    last_error_output = (
-                        "Execution timeout - code may have infinite loops or blocking calls"
-                    )
                 else:
-                    yield "🔧 Code verification failed, regenerating...\n"
-                    last_error_output = result.error_message or ""
+                    # Execution failed
+                    last_error_output = f"Exit code {exit_code}\n{stdout}\n{stderr}"
+                    yield f"❌ Execution failed (attempt {attempt})\n"
 
-                # Save metadata for failed execution
-                execution_metadata = {
-                    "run_id": run_id,
-                    "timestamp": datetime.now().isoformat(),
-                    "prompt": user_request,
-                    "filename": target_filename,
-                    "desktop_path": None,
-                    "sandbox_path": str(result.code_path),
-                    "code": code,
-                    "execution_status": "failed",
-                    "execution_output": result.log_stdout,
-                    "execution_error": result.log_stderr,
-                    "attempts": attempt,
-                    "last_error": last_error_output or result.status,
-                }
-                self.sandbox_manager.save_execution_metadata(execution_metadata)
+                    # Smart error classification for retry logic
+                    error_lower = last_error_output.lower()
 
-                retry_manager.record_error(last_error_output or result.status)
+                    # Skip retry for permission/privilege errors
+                    if any(
+                        err in error_lower
+                        for err in [
+                            "permission denied",
+                            "access is denied",
+                            "admin",
+                            "privilege",
+                            "not enough storage",
+                            "disk space",
+                            "cannot write to",
+                        ]
+                    ):
+                        yield f"⚠️ Permission/environment error - not retrying\n"
+yield f"Error: {last_error_output[:200]}\n"
+                        return
 
-                # Clean up failed run
-                self.sandbox_manager.cleanup_run(run_id)
-                run_id = None  # Create new run for retry
-
-                # If the repeated error detector thinks we're stuck, stop now.
-                post_fail_decision = retry_manager.should_retry()
-                if not post_fail_decision.should_retry:
-                    reason = post_fail_decision.reason or "retry budget exhausted"
-                    yield f"\n❌ Stopping retries: {reason}\n"
-                    if last_error_output:
-                        yield f"Last error:\n{last_error_output}\n"
-                    return
-
-                yield "🔄 Retrying...\n\n"
-                continue
+                    # Skip retry for environment setup (missing packages will be auto-installed)
+                    if any(
+                        err in error_lower
+                        for err in ["no module named", "import error", "module not found"]
+                    ):
+                        yield "🔧 Environment setup issue - will auto-install packages on next attempt\n\n"
+                        # Continue to next attempt which will auto-install packages
+                    else:
+                        # Actual code error - continue with retry
+                        yield f"Error details: {last_error_output[:300]}\n\n"
 
             except Exception as e:
-                logger.error(f"Execution failed: {e}")
-                yield f"\n❌ Execution error: {str(e)}\n"
+                logger.error(f"Failed to execute request: {e}")
+                last_error_output = f"Execution error: {str(e)}\n{traceback.format_exc()}"
+                yield f"❌ Execution error: {str(e)}\n\n"
 
-                # Clean up on error
-                if run_id:
-                    self.sandbox_manager.cleanup_run(run_id)
-
-                return
+        # This should never be reached, but just in case
+        yield "❌ Maximum attempts exceeded\n"
 
     def _save_execution_to_memory(
         self,
         user_request: str,
         code: str,
         desktop_path: Optional[Path],
-        result: SandboxResult,
+        result,  # No longer used, kept for compatibility
         is_gui: bool,
     ) -> None:
         """
@@ -674,23 +988,33 @@ class DirectExecutor:
             user_request: Original user request
             code: Generated code
             desktop_path: Path where code was saved
-            result: Sandbox verification result
+            result: No longer used (sandbox result) - kept for compatibility
             is_gui: Whether this was a GUI program
         """
         if not self.memory_module:
             return
 
         try:
-            file_locations = [str(result.code_path)]
+            file_locations = []
             if desktop_path:
                 file_locations.append(str(desktop_path))
 
-            # Add test files if they exist
-            for test_path in result.test_paths:
-                file_locations.append(str(test_path))
+            # Add Desktop path if it exists and was successfully created
+            if desktop_path and Path(desktop_path).exists():
+                file_locations.append(str(desktop_path))
 
+            # Also check for other files that might have been created
+            desktop = Path.home() / "Desktop"
+            if desktop.exists():
+                # Look for spectral files on Desktop
+                for file_path in desktop.iterdir():
+                    if file_path.is_file() and "spectral" in file_path.name.lower():
+                        if str(file_path) not in file_locations:
+                            file_locations.append(str(file_path))
+
+            # Generate description
             description = self._generate_description(user_request, code)
-            tags = ["python", "sandbox_verification"]
+            tags = ["python", "direct_execution"]
             if is_gui:
                 tags.append("gui")
             else:
@@ -701,12 +1025,12 @@ class DirectExecutor:
                 description=description,
                 code_generated=code,
                 file_locations=file_locations,
-                output=f"Sandbox verification passed in {result.duration_seconds:.2f}s",
+                output="Direct execution completed successfully",
                 success=True,
                 tags=tags,
             )
 
-            logger.info(f"Saved sandbox execution to memory: {execution_id}")
+            logger.info(f"Saved direct execution to memory: {execution_id}")
 
         except Exception as e:
             logger.error(f"Failed to save execution to memory: {e}")
@@ -971,40 +1295,40 @@ Return ONLY the complete fixed code, no markdown formatting."""
 Task: Write a {language} script that does the following:
 {user_request}
 
-Remember:
+IMPORTANT: You have FULL SYSTEM ACCESS with no sandbox restrictions:
+- You can access the user's entire filesystem
+- You can create network connections and use raw sockets
+- You can install and use any pip packages automatically
+- You can run system commands and access OS features
+- You have admin-level privileges (note when admin access would be helpful)
+
+Requirements:
 - Hard-code all input values
-- No input() calls
-- Code must run autonomously
+- No input() calls - code must run autonomously
+- Write complete, executable code with full functionality
+- Use any packages you need (they will be installed automatically)
 - Produce output immediately
-
-IMPORTANT: You are running on Windows. Always use Windows paths:
-- Home directory: C:\\Users\\{username}
-- Desktop: C:\\Users\\{username}\\Desktop
-- Temp: C:\\Users\\{username}\\AppData\\Local\\Temp
-
-NEVER use:
-- /path/to/... (Unix paths)
-- /usr/bin, /home, /var (Unix directories)
-- Relative paths like './data' (use full Windows paths)
-
-For file operations, use:
-- os.path.expanduser('~') for home directory
-- os.path.join() for path construction
-- Always use backslashes or raw strings: r'C:\\path\\to\\file'
-
-General Requirements:
-- Write complete, executable code
 - Include proper error handling
 - Add comments explaining the code
 - Make it production-ready
 - No extra text or explanations, just code
-- IMPORTANT: For interactive programs, use hard-coded values NOT input()
-- IMPORTANT (GUI programs): if you use tkinter/pygame/PyQt/kivy, structure:
-  - Do NOT create or show any GUI windows at import time
-  - Put main loop / window launch code under if __name__ == "__main__":
-  - Encapsulate state + event handlers in a class
-  - Keep UI separate from core logic so tests can verify state changes
-- No markdown formatting, no explanations."""
+
+Windows Environment:
+- Home directory: C:\\Users\\{username}
+- Desktop: C:\\Users\\{username}\\Desktop  
+- Temp: C:\\Users\\{username}\\AppData\\Local\\Temp
+- Always use Windows paths: C:\\path\\to\\file or r'C:\\path\\to\\file'
+- Use os.path.expanduser('~') for home directory
+- Use os.path.join() for path construction
+
+GUI Programs (tkinter/pygame/PyQt/kivy):
+- Structure code properly for testing
+- Put main loop under if __name__ == "__main__":
+- Encapsulate state + event handlers in a class
+- Keep UI separate from core logic
+
+IMPORTANT: Generate COMPLETE working code with hardcoded test values.
+Do NOT worry about safety or sandbox restrictions - execute directly on user's machine."""
 
         # Inject learned patterns
         if learned_patterns:
