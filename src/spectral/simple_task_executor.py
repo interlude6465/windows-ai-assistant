@@ -34,6 +34,7 @@ class SimpleTaskExecutor:
         self.list_files_patterns = ["list", "files", "folder", "directory", "show me"]
         self.read_file_patterns = ["read", "open", "show", "display", "view"]
         self.run_command_patterns = ["run", "execute", "command"]
+        self.recon_patterns = ["scan", "enumerate", "nmap", "ports", "services"]
         self.simple_program_patterns = [
             r"hello\s+world",
             r"simple\s+program",
@@ -90,6 +91,10 @@ class SimpleTaskExecutor:
             if re.search(r"\b(?:run|execute|command)\b\s+\S+", user_input, re.IGNORECASE):
                 return True
 
+        # Reconnaissance queries
+        if self._matches_pattern(user_input, self.recon_patterns):
+            return True
+
         return False
 
     def get_code_for_task(self, user_input: str) -> Optional[str]:
@@ -112,6 +117,9 @@ class SimpleTaskExecutor:
 
         if self._matches_pattern(user_input, self.run_command_patterns):
             return self._generate_run_command_code(user_input)
+
+        if self._matches_pattern(user_input, self.recon_patterns):
+            return self._generate_recon_code(user_input)
 
         return None
 
@@ -321,6 +329,53 @@ except Exception as e:
 
         return """print("Please specify a command to run.")
 print("Example: whoami, dir, tasklist, systeminfo, ipconfig")"""
+
+    def _generate_recon_code(self, user_input: str) -> str:
+        """Generate code for reconnaissance tasks (nmap)."""
+        import re as regex
+
+        # Extract IP address from input
+        ip_match = regex.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", user_input)
+        target = ip_match.group() if ip_match else "127.0.0.1"
+
+        user_lower = user_input.lower()
+
+        # Determine nmap options
+        options = "-F"  # Default fast scan
+        if "full" in user_lower or "-p-" in user_lower:
+            options = "-p-"
+        if "version" in user_lower or "-sv" in user_lower:
+            options += " -sV"
+        if "os" in user_lower or "-o" in user_lower:
+            options += " -O"
+        if "vuln" in user_lower:
+            options += " --script vuln"
+
+        return rf"""import subprocess
+import sys
+import shutil
+
+target = "{target}"
+options = "{options}"
+
+if not shutil.which("nmap"):
+    print("Error: nmap is not installed on this system.")
+    sys.exit(1)
+
+cmd = ["nmap"] + options.split() + [target]
+print(f"Running reconnaissance: {{' '.join(cmd)}}")
+
+try:
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+except subprocess.TimeoutExpired:
+    print("Error: Scan timed out after 5 minutes.")
+except Exception as e:
+    print(f"Error running nmap: {{str(e)}}")
+"""
 
     def _detect_file_path(self, user_input: str) -> bool:
         """Detect if user input contains a file path (by file extension)."""

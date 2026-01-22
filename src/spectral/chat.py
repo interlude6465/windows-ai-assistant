@@ -179,6 +179,11 @@ class ChatSession:
             llm_client=llm_client_for_classifiers,
             research_handler=self.research_handler,
             semantic_classifier=self.semantic_classifier,
+            direct_executor=(
+                self.dual_execution_orchestrator.direct_executor
+                if self.dual_execution_orchestrator
+                else None
+            ),
         )
 
     def add_message(

