@@ -9,11 +9,10 @@ Handles loading settings from YAML/JSON files with support for:
 
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -23,7 +22,7 @@ class LLMConfig(BaseModel):
     """Configuration for LLM provider."""
 
     provider: str = Field(default="ollama", description="LLM provider (e.g., ollama, local)")
-    model: str = Field(default="llama3", description="Model name or path")
+    model: str = Field(default="dolphin-llama32", description="Model name or path")
     base_url: Optional[str] = Field(
         default="http://localhost:11434", description="Base URL for provider"
     )
@@ -72,8 +71,8 @@ class ExecutorLLMConfig(BaseModel):
 
     provider: str = Field(default="ollama", description="LLM provider (e.g., ollama, local)")
     model: str = Field(
-        default="deepseek-coder:33b-instruct-q4_K_M",
-        description="Model name for execution (deepseek-coder:33b-instruct-q4_K_M recommended)",
+        default="qwen2.5-coder:14b",
+        description="Model name for execution (qwen2.5-coder:14b recommended)",
     )
     base_url: Optional[str] = Field(
         default="http://localhost:11434", description="Base URL for provider"
@@ -255,7 +254,7 @@ class ConfigLoader:
             SpectralConfig: Current configuration
         """
         if self.config is None:
-            self.load()
+            self.config = self.load()
         return self.config
 
     def to_dict(self) -> Dict[str, Any]:
@@ -266,12 +265,12 @@ class ConfigLoader:
             Dictionary representation of configuration
         """
         if self.config is None:
-            self.load()
-        config_dict = self.config.model_dump()
+            self.config = self.load()
+        config_dict = self.config.model_dump()  # type: ignore[attr-defined]
         # Convert Path objects to strings for YAML serialization
         return self._convert_paths_to_strings(config_dict)
 
-    def _convert_paths_to_strings(self, obj: Any) -> Any:
+    def _convert_paths_to_strings(self, obj: Any) -> Union[Dict[str, Any], List[Any], str]:
         """
         Recursively convert Path objects to strings.
 
@@ -297,5 +296,6 @@ class ConfigLoader:
             YAML string representation
         """
         if self.config is None:
-            self.load()
-        return yaml.dump(self.to_dict(), default_flow_style=False)
+            self.config = self.load()
+        yaml_output = yaml.dump(self.to_dict(), default_flow_style=False)
+        return str(yaml_output)
