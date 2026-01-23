@@ -1315,13 +1315,8 @@ class ChatSession:
                 intent, confidence = self.semantic_classifier.classify(user_input)
 
                 # Check for code intent with reasonable confidence (lowered threshold to 0.3 for better catch rate)
-                # Also handle ACTION intents that involve code execution
                 should_use_dual_exec = (
-                    (intent == SemanticIntent.CODE and confidence >= 0.3) or
-                    (intent == SemanticIntent.ACTION and confidence >= 0.4 and 
-                     any(keyword in user_input.lower() for keyword in 
-                         ['generate', 'create', 'write', 'build', 'make', 'script', 'code', 'program', 
-                          'file', 'scan', 'search', 'list', 'check', 'get', 'run']))
+                    intent == SemanticIntent.CODE and confidence >= 0.3
                 )
                 
                 if should_use_dual_exec:
