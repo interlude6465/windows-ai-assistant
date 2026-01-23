@@ -80,16 +80,17 @@ class Orchestrator:
                 logger.debug("Attempting to execute command via system_action_router")
                 # Try to parse and execute as a system action
                 action_type, params = self._parse_simple_action(command)
-                
+
                 if action_type:
                     logger.info(f"Executing action: {action_type} with params: {params}")
                     action_result = self.system_action_router.execute_action(action_type, **params)
-                    
+
                     if action_result and action_result.success:
                         return {
                             "status": "success",
                             "command": command,
-                            "message": action_result.message or f"Command '{command}' executed successfully",
+                            "message": action_result.message
+                            or f"Command '{command}' executed successfully",
                             "data": action_result.output,
                         }
                     elif action_result:
@@ -105,83 +106,94 @@ class Orchestrator:
         # Fallback: return acknowledgment (but log that execution was not performed)
         logger.warning(f"Command not executed, returning acknowledgment only: {command}")
         result = {
-            "status": "acknowledged",  # Changed from "success" to indicate no execution
+            "status": "acknowledged",  # Changed from "success" to indicate no exec
             "command": command,
-            "message": f"Command '{command}' acknowledged but not executed. Consider using code generation for this task.",
+            "message": (
+                f"Command '{command}' acknowledged but not executed. "
+                "Consider using code generation for this task."
+            ),
             "data": None,
         }
 
         logger.debug(f"Command result: {result}")
         return result
-    
+
     def _parse_simple_action(self, command: str) -> tuple[Optional[str], Dict[str, Any]]:
         """
         Parse a simple command into action type and parameters.
-        
+
         Args:
             command: Natural language command
-            
+
         Returns:
             Tuple of (action_type, params) or (None, {}) if not parseable
         """
         import re
-        
+
         command_lower = command.lower()
-        
+
         # File operations
-        if any(word in command_lower for word in ['list', 'show', 'display']) and \
-           any(word in command_lower for word in ['file', 'folder', 'directory', 'desktop', 'documents']):
+        if any(word in command_lower for word in ["list", "show", "display"]) and any(
+            word in command_lower
+            for word in ["file", "folder", "directory", "desktop", "documents"]
+        ):
             # List files
-            path_match = re.search(r'(?:in|from|at)\s+([^\s,]+)', command, re.IGNORECASE)
+            path_match = re.search(r"(?:in|from|at)\s+([^\s,]+)", command, re.IGNORECASE)
             if path_match:
                 return "list_directory", {"path": path_match.group(1)}
-            elif 'desktop' in command_lower:
+            elif "desktop" in command_lower:
                 return "list_directory", {"path": "~/Desktop"}
-            elif 'documents' in command_lower:
+            elif "documents" in command_lower:
                 return "list_directory", {"path": "~/Documents"}
             return "list_directory", {"path": "."}
-            
+
         # File creation
-        if any(word in command_lower for word in ['create', 'make', 'write']) and 'file' in command_lower:
+        if (
+            any(word in command_lower for word in ["create", "make", "write"])
+            and "file" in command_lower
+        ):
             # Create file
-            name_match = re.search(r'(?:named|called|file)\s+([^\s,]+)', command, re.IGNORECASE)
-            path_match = re.search(r'(?:on|in|at)\s+(?:my\s+)?(\w+)', command, re.IGNORECASE)
-            
+            name_match = re.search(r"(?:named|called|file)\s+([^\s,]+)", command, re.IGNORECASE)
+            path_match = re.search(r"(?:on|in|at)\s+(?:my\s+)?(\w+)", command, re.IGNORECASE)
+
             params = {}
             if name_match:
                 params["filename"] = name_match.group(1)
             if path_match:
                 location = path_match.group(1).lower()
-                if location == 'desktop':
+                if location == "desktop":
                     params["path"] = "~/Desktop"
-                elif location == 'documents':
+                elif location == "documents":
                     params["path"] = "~/Documents"
-            
+
             if params:
                 return "create_file", params
-                
+
         # Network scanning
-        if any(word in command_lower for word in ['scan', 'check', 'test']) and \
-           any(word in command_lower for word in ['network', 'port', 'host', 'ip']):
+        if any(word in command_lower for word in ["scan", "check", "test"]) and any(
+            word in command_lower for word in ["network", "port", "host", "ip"]
+        ):
             # Network scan
-            ip_match = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', command)
+            ip_match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", command)
             if ip_match:
                 return "network_scan", {"target": ip_match.group()}
             return "network_scan", {"target": "localhost"}
-            
+
         # Web search
-        if any(word in command_lower for word in ['search', 'find', 'look']) and \
-           any(word in command_lower for word in ['web', 'internet', 'google', 'online']):
+        if any(word in command_lower for word in ["search", "find", "look"]) and any(
+            word in command_lower for word in ["web", "internet", "google", "online"]
+        ):
             # Web search
-            query_match = re.search(r'(?:for|about)\s+(.+)', command, re.IGNORECASE)
+            query_match = re.search(r"(?:for|about)\s+(.+)", command, re.IGNORECASE)
             if query_match:
                 return "web_search", {"query": query_match.group(1).strip()}
-                
+
         # System info
-        if any(word in command_lower for word in ['get', 'show', 'display']) and \
-           any(word in command_lower for word in ['system', 'info', 'information', 'details']):
+        if any(word in command_lower for word in ["get", "show", "display"]) and any(
+            word in command_lower for word in ["system", "info", "information", "details"]
+        ):
             return "system_info", {}
-            
+
         return None, {}
 
     def execute_plan(self, plan: Plan) -> Dict[str, Any]:
@@ -820,6 +832,63 @@ class Orchestrator:
 
         # Fallback for generic descriptions - try to infer intent from keywords
         logger.info("Attempting fallback parsing for generic description")
+
+        # Check for code creation operations (main function, class, etc.)
+        if any(
+            keyword in description_lower
+            for keyword in [
+                "create main",
+                "define function",
+                "implement function",
+                "write function",
+            ]
+        ):
+            logger.info("Parsed as code structure step (informational)")
+            return None, {
+                "_informational": True,
+                "_note": "Code structure created as part of overall implementation",
+            }
+
+        # Check for code implementation steps
+        if any(
+            keyword in description_lower
+            for keyword in ["implement logic", "add logic", "write logic", "create logic"]
+        ):
+            logger.info("Parsed as code implementation step (informational)")
+            return None, {
+                "_informational": True,
+                "_note": "Code logic implemented as part of overall solution",
+            }
+
+        # Check for testing/validation steps
+        if any(
+            keyword in description_lower
+            for keyword in ["test the", "validate the", "verify the", "run test"]
+        ):
+            logger.info("Parsed as testing step (informational)")
+            return None, {
+                "_informational": True,
+                "_note": "Testing handled by execution verification",
+            }
+
+        # Check for installation/setup operations
+        if any(keyword in description_lower for keyword in ["install", "setup", "configure"]):
+            if (
+                "library" in description_lower
+                or "libraries" in description_lower
+                or "package" in description_lower
+            ):
+                logger.info("Parsed as library installation step (informational)")
+                return None, {
+                    "_informational": True,
+                    "_note": "Library installation handled by environment",
+                }
+            elif "required" in description_lower or "dependencies" in description_lower:
+                logger.info("Parsed as dependency setup step (informational)")
+                return None, {
+                    "_informational": True,
+                    "_note": "Dependencies handled by environment",
+                }
 
         # Check for response/message operations (informational steps)
         if any(

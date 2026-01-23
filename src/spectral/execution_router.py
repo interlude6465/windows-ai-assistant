@@ -15,13 +15,49 @@ logger = logging.getLogger(__name__)
 
 # Common Python stdlib modules that don't need research
 PYTHON_STDLIB = {
-    "os", "sys", "re", "json", "datetime", "time", "math", "random",
-    "collections", "itertools", "functools", "operator", "string",
-    "pathlib", "typing", "enum", "abc", "copy", "io", "logging",
-    "warnings", "threading", "multiprocessing", "subprocess", "socket",
-    "http", "urllib", "email", "html", "xml", "csv", "configparser",
-    "hashlib", "hmac", "secrets", "ssl", "base64", "binascii",
-    "struct", "codecs", "unicodedata", "locale", "gettext",
+    "os",
+    "sys",
+    "re",
+    "json",
+    "datetime",
+    "time",
+    "math",
+    "random",
+    "collections",
+    "itertools",
+    "functools",
+    "operator",
+    "string",
+    "pathlib",
+    "typing",
+    "enum",
+    "abc",
+    "copy",
+    "io",
+    "logging",
+    "warnings",
+    "threading",
+    "multiprocessing",
+    "subprocess",
+    "socket",
+    "http",
+    "urllib",
+    "email",
+    "html",
+    "xml",
+    "csv",
+    "configparser",
+    "hashlib",
+    "hmac",
+    "secrets",
+    "ssl",
+    "base64",
+    "binascii",
+    "struct",
+    "codecs",
+    "unicodedata",
+    "locale",
+    "gettext",
 }
 
 
@@ -60,6 +96,7 @@ class ExecutionRouter:
             "get",
             "open",
             "close",
+            "exploit",  # Security action verb
         }
 
         # Planning mode keywords (complex, multi-step requests)
@@ -257,6 +294,24 @@ class ExecutionRouter:
             logger.debug(
                 "Creation command detected, routing to DIRECT/PLANNING instead of RESEARCH"
             )
+            # Check if it's a complex multi-step creation
+            # First check for explicit multi-step security patterns
+            multi_step_security = [
+                "reverse shell with persistence",
+                "reverse shell with",
+                "shell with persistence",
+                "persistence and exfil",
+                "persistence and",
+                "and exfil",
+                "analyze and create",
+                "analyze this malware and",
+                "full reverse shell",
+                "complete reverse shell",
+            ]
+            if any(phrase in input_lower for phrase in multi_step_security):
+                logger.debug("Multi-step security workflow detected in creation command")
+                return ExecutionMode.PLANNING, 0.8
+
             # Determine between DIRECT and PLANNING
             direct_keyword_count = sum(1 for word in words if word in self.direct_keywords)
             planning_keyword_count = sum(1 for word in words if word in self.planning_keywords)
@@ -269,6 +324,19 @@ class ExecutionRouter:
         if any(pattern in input_lower for pattern in meta_prompts):
             logger.debug("Meta-prompt detected, avoiding research")
             return ExecutionMode.DIRECT, 0.7
+
+        # FAST PATH for multi-step workflows: check BEFORE simple direct check
+        # to catch "analyze X and create Y" type requests
+        multi_step_action_patterns = [
+            "analyze and create",
+            "analyze this malware and",
+            "scan and exploit",
+            "find and exploit",
+            "enumerate and",
+        ]
+        if any(phrase in input_lower for phrase in multi_step_action_patterns):
+            logger.debug("Multi-step action pattern detected")
+            return ExecutionMode.PLANNING, 0.8
 
         # FAST PATH: keep simple, single-step actions in DIRECT mode.
         # This prevents over-routing to PLANNING for requests like "list files" or
@@ -377,6 +445,18 @@ class ExecutionRouter:
         if not words:
             return False
 
+        # Simple system info requests - check BEFORE complex check
+        # because "system" is in planning_keywords
+        simple_info_requests = [
+            "get my system info",
+            "get system info",
+            "show system info",
+            "system information",
+            "my system info",
+        ]
+        if any(phrase in input_lower for phrase in simple_info_requests):
+            return True
+
         if self._is_complex_request(input_lower, words):
             return False
 
@@ -415,6 +495,28 @@ class ExecutionRouter:
         if input_lower.startswith(("check if ", "see if ", "verify if ")):
             conditional_markers = [" then ", " else ", " otherwise "]
             return any(marker in input_lower for marker in conditional_markers)
+
+        # Multi-step pentesting/security workflows
+        multi_step_security = [
+            "reverse shell with persistence",
+            "reverse shell with",
+            "shell with persistence",
+            "persistence and exfil",
+            "persistence and",
+            "and exfil",
+            "scan and exploit",
+            "analyze and create",
+            "analyze this malware and",
+            "find and exploit",
+            "enumerate and",
+            "full reverse shell",
+            "complete reverse shell",
+            "full pentesting",
+            "complete pentesting",
+            "create detection rules",
+        ]
+        if any(phrase in input_lower for phrase in multi_step_security):
+            return True
 
         # Explicit multi-step markers
         multi_step_phrases = [

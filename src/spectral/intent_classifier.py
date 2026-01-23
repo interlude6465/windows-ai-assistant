@@ -271,23 +271,15 @@ class IntentClassifier:
             logger.debug("Empty input")
             return IntentType.UNKNOWN, 0.3
 
-        # Strong social/casual chat signals
-        strong_chat_phrases = [
+        # Strong social/casual chat signals with word boundaries
+        strong_chat_full_phrases = [
             "how are you",
             "what's up",
             "whats up",
-            "hello",
-            "hi",
-            "hey",
             "good morning",
             "good afternoon",
             "good evening",
-            "bye",
-            "goodbye",
             "thank you",
-            "thanks",
-            "sorry",
-            "excuse me",
             "tell me a joke",
             "tell me a story",
             "tell me about you",
@@ -295,9 +287,18 @@ class IntentClassifier:
             "who are you",
             "your name",
         ]
-        if any(phrase in input_lower for phrase in strong_chat_phrases):
+        # Single word greetings need word boundaries
+        strong_chat_words = ["hello", "hi", "hey", "bye", "goodbye", "thanks", "sorry"]
+
+        if any(phrase in input_lower for phrase in strong_chat_full_phrases):
             logger.debug("Strong chat phrase detected")
             return IntentType.CHAT, 0.9
+
+        # Check single-word greetings with word boundaries
+        for word in strong_chat_words:
+            if re.search(rf"\b{word}\b", input_lower):
+                logger.debug(f"Strong chat word detected: {word}")
+                return IntentType.CHAT, 0.9
 
         starts_with_request = input_lower.startswith(
             (
@@ -313,9 +314,7 @@ class IntentClassifier:
                 "pls ",
             )
         )
-        has_question_word = bool(
-            re.search(r"\b(how|what|why|when|where|who|which)\b", input_lower)
-        )
+        has_question_word = bool(re.search(r"\b(how|what|why|when|where|who|which)\b", input_lower))
         has_question_mark = input_lower.endswith("?")
         has_question_form = starts_with_request or has_question_word or has_question_mark
 
@@ -343,13 +342,34 @@ class IntentClassifier:
             "what's listening",
             "let me know what's listening",
             "let me know what is listening",
+            "can you run",
+            "can you execute",
+            "port scan",
+            "network scan",
+            "scan a",
+            "scan the",
         ]
+
+        # Polite action requests - question form but clearly wanting execution
+        polite_action_patterns = [
+            "can you run",
+            "can you execute",
+            "could you run",
+            "would you run",
+            "will you run",
+            "can you help me with",
+            "can you help with",
+            "run this",
+            "execute this",
+        ]
+        has_polite_action_request = any(phrase in input_lower for phrase in polite_action_patterns)
 
         has_action_signals = (
             starts_with_action_verb
             or bool(action_verbs_in_input)
             or action_keyword_count >= 2
             or any(phrase in input_lower for phrase in action_question_phrases)
+            or has_polite_action_request
         )
 
         # Informational/learning style requests
@@ -366,16 +386,37 @@ class IntentClassifier:
         ]
         is_informational = any(phrase in input_lower for phrase in informational_phrases)
 
+        # Brief tool invocations (casual action requests like "powershell please")
+        brief_tool_invocations = [
+            "powershell please",
+            "python please",
+            "use powershell",
+            "use python",
+            "powershell to do",
+            "python to do",
+        ]
+        is_brief_tool_invocation = any(phrase in input_lower for phrase in brief_tool_invocations)
+
+        # Brief tool invocations (casual action requests)
+        if is_brief_tool_invocation:
+            logger.debug("Brief tool invocation detected")
+            return IntentType.ACTION, 0.85
+
         # Clear imperative action (no question/request framing)
         if starts_with_action_verb and not has_question_form:
             logger.debug(f"Action verb detected: {words[0]}")
             return IntentType.ACTION, 0.85
 
+        # Polite action requests (question form but clear execution intent)
+        if has_polite_action_request and has_action_signals:
+            logger.debug("Polite action request detected")
+            return IntentType.ACTION, 0.80
+
         # Question/request form + action signals -> ACTION, but with lower confidence so
         # semantic classification (LLM) can resolve do-vs-learn nuances.
         if has_question_form and has_action_signals:
             logger.debug("Question form with action signals detected")
-            return IntentType.ACTION, 0.65
+            return IntentType.ACTION, 0.70
 
         # Non-question action signals
         if has_action_signals:
@@ -423,7 +464,8 @@ class IntentClassifier:
         Raises:
             Exception: If LLM classification fails (caller should fall back to heuristics)
         """
-        prompt = f"""You are an intent classifier. Determine if the user is asking the AI to DO something (ACTION) or asking for information/conversation (CHAT).
+        prompt = f"""You are an intent classifier. Determine if the user is asking the
+AI to DO something (ACTION) or asking for information/conversation (CHAT).
 
 CRITICAL DISTINCTION:
 - CHAT: The user wants information, explanations, definitions, or learning.
@@ -435,15 +477,16 @@ CRITICAL DISTINCTION:
 - ACTION: The user wants the AI to perform an action/task and provide results.
   IMPORTANT: Question form can still be ACTION.
   Examples:
-  - "how do I exploit with metasploit" (user wants exploitation help - action)
-  - "can you help me with a metasploit attack" (user wants help doing the attack - action)
+  - "how do I exploit with metasploit" (wants help - action)
+  - "can you help me with metasploit attack" (wants help - action)
   - "run a network scan" (user wants execution)
   - "find what services are running" (user wants results)
-  - "what ports are open on 192.168.1.1" (user wants the AI to check ports - action)
+  - "what ports are open on 192.168.1.1" (wants check - action)
   - "can you run this ps script" (user wants execution)
 
 KEY RULE:
-- If the user is asking the AI to DO something (run/execute/scan/find/check/list/search/etc.), classify as ACTION.
+- If the user is asking the AI to DO something
+  (run/execute/scan/find/check/list/search/etc.), classify as ACTION.
 - If the user is asking to LEARN/UNDERSTAND, classify as CHAT.
 
 User input: "{user_input}"
@@ -456,6 +499,8 @@ Respond ONLY with JSON:
 }}"""
 
         try:
+            if self.llm_client is None:
+                raise Exception("LLM client not available")
             response = self.llm_client.generate(prompt, max_tokens=150)
             return self._parse_semantic_response(response)
         except Exception as e:
