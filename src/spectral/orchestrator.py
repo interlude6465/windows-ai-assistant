@@ -11,6 +11,7 @@ from spectral.action_executor import ActionResult
 from spectral.action_fallback_strategies import ExecutionReport, StrategyExecutor
 from spectral.config import JarvisConfig
 from spectral.execution_verifier import ExecutionVerifier
+from spectral.llm_client import LLMClient
 from spectral.memory import MemoryStore, ToolCapability
 from spectral.reasoning import Plan, PlanStep
 
@@ -53,6 +54,18 @@ class Orchestrator:
         # Initialize verification and retry components
         self.execution_verifier = ExecutionVerifier(timeout=5) if enable_verification else None
         self.strategy_executor = StrategyExecutor(max_retries=max_retries) if enable_retry else None
+
+        # Initialize LLM client for code generation
+        self.llm_client: Optional[LLMClient] = None
+        try:
+            # Only initialize if config.llm is a proper LLMConfig, not a mock
+            if hasattr(config.llm, "provider"):
+                self.llm_client = LLMClient(config.llm)
+                logger.info("LLM client initialized for code generation")
+            else:
+                logger.debug("Skipping LLM client initialization (config.llm is a mock)")
+        except Exception as e:
+            logger.warning(f"Failed to initialize LLM client for code generation: {e}")
 
         logger.info("Orchestrator initialized")
         logger.info(f"Verification enabled: {enable_verification}")
@@ -325,8 +338,10 @@ class Orchestrator:
                 # Execute with verification and retry if enabled
                 if self.enable_retry and self.strategy_executor:
                     logger.info("========== EXECUTING WITH RETRY AND VERIFICATION ==========")
+                    # Get dry_run flag from router if available
+                    dry_run = getattr(self.system_action_router, "dry_run", False)
                     result, attempts = self._execute_with_retry(
-                        action_type, params, dry_run=self.system_action_router.dry_run
+                        action_type, params, dry_run=dry_run
                     )
 
                     # Build enhanced result with execution report
@@ -397,6 +412,47 @@ class Orchestrator:
                         "verification_status": verification_status,
                     }
 
+            elif params.get("_code_generation"):
+                # This step requires LLM-based code generation
+                logger.info(f"Step {step.step_number} requires code generation: {step.description}")
+
+                language = params.get("_language", "python")
+                description = params.get("_description", step.description)
+
+                # Generate code using LLM
+                code = self._generate_code_from_description(description, language)
+
+                if not code:
+                    logger.error(f"Failed to generate code for: {description}")
+                    return {
+                        "step_number": step.step_number,
+                        "description": step.description,
+                        "success": False,
+                        "message": f"Failed to generate code from description: {description}",
+                        "data": None,
+                        "verification_status": "not_applicable",
+                    }
+
+                # Execute the generated code
+                logger.info(f"Executing generated {language} code...")
+                result = self._execute_generated_code(code, language)
+
+                return {
+                    "step_number": step.step_number,
+                    "description": step.description,
+                    "success": result.success,
+                    "message": result.message
+                    or (
+                        "Code generation and execution: "
+                        f"{'success' if result.success else 'failed'}"
+                    ),
+                    "data": {
+                        "generated_code": code,
+                        "output": result.output,
+                        "error": result.error,
+                    },
+                    "verification_status": "verified" if result.success else "failed",
+                }
             elif params.get("_informational"):
                 # action_type is None but marked as informational/planning step
                 logger.info(
@@ -641,22 +697,29 @@ class Orchestrator:
                         return "subprocess_open_application", {"application_path": app_name}
 
         # Enhanced typing operations - check this before general app launching
+        # BUT: exclude code/function writing (those go to code generation)
         if any(keyword in description_lower for keyword in ["type", "write", "enter"]):
-            text = extract_text_to_type(description)
-            if text:
-                logger.info(f"Parsed typing_type_text action: text={text}")
-                return "typing_type_text", {"text": text}
-            else:
-                # Check if this is typing in a specific application context
-                if "notepad" in description_lower or "file" in description_lower:
-                    logger.info(
-                        "Parsed typing_type_text action with default text for application context"
-                    )
-                    return "typing_type_text", {"text": "hello world"}
+            # Don't treat code/function writing as typing
+            code_writing_keywords = ["function", "script", "code", "program", "class", "method"]
+            is_code_writing = any(kw in description_lower for kw in code_writing_keywords)
+
+            if not is_code_writing:
+                text = extract_text_to_type(description)
+                if text:
+                    logger.info(f"Parsed typing_type_text action: text={text}")
+                    return "typing_type_text", {"text": text}
                 else:
-                    # Default text if none found
-                    logger.info("Parsed typing_type_text action with default text")
-                    return "typing_type_text", {"text": "hello world"}
+                    # Check if this is typing in a specific application context
+                    if "notepad" in description_lower or "file" in description_lower:
+                        logger.info(
+                            "Parsed typing_type_text action with default text "
+                            "for application context"
+                        )
+                        return "typing_type_text", {"text": "hello world"}
+                    else:
+                        # Default text if none found
+                        logger.info("Parsed typing_type_text action with default text")
+                        return "typing_type_text", {"text": "hello world"}
 
         # Application launch operations (enhanced)
         if any(
@@ -833,6 +896,37 @@ class Orchestrator:
         # Fallback for generic descriptions - try to infer intent from keywords
         logger.info("Attempting fallback parsing for generic description")
 
+        # Check for code generation requests (Python, JavaScript, etc.)
+        code_generation_keywords = [
+            "create",
+            "write",
+            "make",
+            "build",
+            "generate",
+            "implement",
+            "develop",
+            "script",
+            "program",
+            "code",
+        ]
+
+        # If tool is a programming language or the description is about creating code
+        programming_languages = ["python", "javascript", "java", "c++", "ruby", "go", "rust", "php"]
+
+        is_code_generation = tool.lower() in programming_languages or (
+            any(keyword in description_lower for keyword in code_generation_keywords)
+            and any(lang in description_lower for lang in programming_languages)
+        )
+
+        if is_code_generation:
+            logger.info(f"Detected code generation request: tool={tool}, description={description}")
+            # Use "_code_generation" marker to trigger LLM-based code generation
+            return None, {
+                "_code_generation": True,
+                "_language": tool if tool.lower() in programming_languages else "python",
+                "_description": description,
+            }
+
         # Check for code creation operations (main function, class, etc.)
         if any(
             keyword in description_lower
@@ -843,10 +937,11 @@ class Orchestrator:
                 "write function",
             ]
         ):
-            logger.info("Parsed as code structure step (informational)")
+            logger.info("Parsed as code structure step - using code generation")
             return None, {
-                "_informational": True,
-                "_note": "Code structure created as part of overall implementation",
+                "_code_generation": True,
+                "_language": tool if tool.lower() in programming_languages else "python",
+                "_description": description,
             }
 
         # Check for code implementation steps
@@ -854,10 +949,11 @@ class Orchestrator:
             keyword in description_lower
             for keyword in ["implement logic", "add logic", "write logic", "create logic"]
         ):
-            logger.info("Parsed as code implementation step (informational)")
+            logger.info("Parsed as code implementation step - using code generation")
             return None, {
-                "_informational": True,
-                "_note": "Code logic implemented as part of overall solution",
+                "_code_generation": True,
+                "_language": tool if tool.lower() in programming_languages else "python",
+                "_description": description,
             }
 
         # Check for testing/validation steps
@@ -983,3 +1079,199 @@ class Orchestrator:
         if self.memory_store is not None:
             return list(self.memory_store.list_capabilities())
         return []
+
+    def _generate_code_from_description(
+        self, description: str, language: str = "python"
+    ) -> Optional[str]:
+        """
+        Use LLM to generate actual executable code from a step description.
+
+        This enables the orchestrator to convert high-level descriptions into
+        actual working code that can be executed.
+
+        Args:
+            description: Step description (e.g., "Create a Python script for the keylogger")
+            language: Programming language (default: "python")
+
+        Returns:
+            Generated code as a string, or None if generation fails
+
+        Example:
+            Input: "Create a Python script that prints hello world"
+            Output: "print('hello world')"
+
+            Input: "Create a keylogger that logs all keypresses"
+            Output: Complete Python keylogger code
+        """  # noqa: E501
+        if not self.llm_client:
+            logger.error("No LLM client available for code generation")
+            return None
+
+        # Build a detailed prompt that generates COMPLETE, WORKING code
+        prompt = f"""You are an expert {language} developer. Generate \
+COMPLETE, WORKING {language} code to accomplish this task.
+
+Task: {description}
+
+Requirements:
+1. Return ONLY the {language} code - no explanations, no markdown, no comments outside the code
+2. Make it complete and runnable (not pseudo-code or skeleton code)
+3. Handle errors gracefully with try-except blocks where appropriate
+4. The code must be ready to execute immediately
+5. Do NOT include markdown code blocks (no ```) - just the raw code
+
+Generate the code now:"""
+
+        try:
+            logger.info(f"Generating {language} code for: {description}")
+            code_result = self.llm_client.generate(prompt, max_tokens=1500)
+            code = str(code_result) if code_result else ""
+
+            if not code or code.strip() == "":
+                logger.warning(f"Code generation returned empty for: {description}")
+                return None
+
+            # Clean up code (remove markdown code blocks if present)
+            code = code.strip()
+            if code.startswith("```"):
+                # Remove markdown code blocks
+                lines = code.split("\n")
+                # Find start and end of code block
+                start_idx = 0
+                end_idx = len(lines)
+
+                for i, line in enumerate(lines):
+                    if line.strip().startswith("```"):
+                        if start_idx == 0:
+                            start_idx = i + 1
+                        else:
+                            end_idx = i
+                            break
+
+                code = "\n".join(lines[start_idx:end_idx])
+
+            logger.info(f"Generated code ({len(code)} chars) for: {description}")
+            logger.debug(f"Generated code:\n{code}")
+            return code
+
+        except Exception as e:
+            logger.error(f"Code generation failed for '{description}': {e}")
+            return None
+
+    def _execute_generated_code(
+        self, code: str, language: str = "python", timeout: int = 30
+    ) -> ActionResult:
+        """
+        Execute generated code using subprocess.
+
+        Args:
+            code: Code to execute
+            language: Programming language
+            timeout: Execution timeout in seconds
+
+        Returns:
+            ActionResult with execution status and output
+        """
+        import subprocess
+        import sys
+
+        logger.info(f"Executing {language} code ({len(code)} chars)")
+
+        try:
+            if language == "python":
+                # Execute Python code
+                result = subprocess.run(
+                    [sys.executable, "-c", code],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+
+                success = result.returncode == 0
+                output = result.stdout if result.stdout else result.stderr
+                error = result.stderr if result.returncode != 0 else None
+
+                logger.info(
+                    f"Python code execution: success={success}, return_code={result.returncode}"
+                )
+                if output:
+                    logger.debug(f"Output: {output[:500]}")  # Log first 500 chars
+
+                return ActionResult(
+                    success=success,
+                    action_type="code_execution",
+                    message=f"Code executed with return code {result.returncode}",
+                    output=output,
+                    error=error,
+                )
+
+            elif language in ["bash", "shell", "sh"]:
+                # Execute bash code
+                result = subprocess.run(
+                    code,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+
+                success = result.returncode == 0
+                output = result.stdout if result.stdout else result.stderr
+                error = result.stderr if result.returncode != 0 else None
+
+                return ActionResult(
+                    success=success,
+                    action_type="code_execution",
+                    message=f"Shell code executed with return code {result.returncode}",
+                    output=output,
+                    error=error,
+                )
+
+            elif language in ["powershell", "ps1"]:
+                # Execute PowerShell code
+                result = subprocess.run(
+                    ["powershell", "-Command", code],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+
+                success = result.returncode == 0
+                output = result.stdout if result.stdout else result.stderr
+                error = result.stderr if result.returncode != 0 else None
+
+                return ActionResult(
+                    success=success,
+                    action_type="code_execution",
+                    message=f"PowerShell code executed with return code {result.returncode}",
+                    output=output,
+                    error=error,
+                )
+
+            else:
+                return ActionResult(
+                    success=False,
+                    action_type="code_execution",
+                    message=f"Unsupported language for execution: {language}",
+                    error=f"Language '{language}' not supported",
+                )
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"Code execution timed out after {timeout}s")
+            return ActionResult(
+                success=False,
+                action_type="code_execution",
+                message=f"Code execution timed out (>{timeout}s)",
+                error="Timeout",
+            )
+        except Exception as e:
+            logger.error(f"Code execution failed: {e}", exc_info=True)
+            return ActionResult(
+                success=False,
+                action_type="code_execution",
+                message=f"Code execution failed: {str(e)}",
+                error=str(e),
+            )
