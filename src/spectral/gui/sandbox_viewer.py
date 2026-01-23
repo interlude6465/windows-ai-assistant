@@ -94,32 +94,31 @@ class SandboxViewer(ctk.CTkFrame):
         top_row = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         top_row.pack(fill="both", expand=True, padx=5, pady=2)
 
-        # Code editor - takes 70% width
-        self.code_editor = LiveCodeEditor(top_row, width=500, height=200)
+        # Code editor (main focus)
+        self.code_editor = LiveCodeEditor(top_row, width=650, height=260)
         self.code_editor.pack(side="left", fill="both", expand=True, padx=(0, 2))
 
-        # Status panel - takes 30% width
-        self.status_panel = StatusPanel(top_row, width=200, height=200)
-        self.status_panel.pack(side="right", fill="both", expand=True, padx=(2, 0))
+        # Status panel
+        self.status_panel = StatusPanel(top_row, width=250, height=260)
+        self.status_panel.pack(side="right", fill="both", expand=False, padx=(2, 0))
 
-        # Middle row: Execution console (left) + Test results (right)
+        # Middle row: Execution console (as before)
         middle_row = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         middle_row.pack(fill="both", expand=True, padx=5, pady=2)
 
-        # Execution console - takes 50% width
-        self.execution_console = ExecutionConsole(middle_row, width=350, height=200)
-        self.execution_console.pack(side="left", fill="both", expand=True, padx=(0, 2))
+        self.execution_console = ExecutionConsole(middle_row, height=260)
+        self.execution_console.pack(fill="both", expand=True)
 
-        # Test results - takes 50% width
-        self.test_results = TestResultsViewer(middle_row, width=350, height=200)
-        self.test_results.pack(side="right", fill="both", expand=True, padx=(2, 0))
-
-        # Bottom row: Deployment panel
+        # Bottom row: Deployment (left) + Live chat feed (right)
         bottom_row = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         bottom_row.pack(fill="x", padx=5, pady=2)
 
-        self.deployment_panel = DeploymentPanel(bottom_row, height=150)
-        self.deployment_panel.pack(fill="x", padx=5, pady=2)
+        self.deployment_panel = DeploymentPanel(bottom_row, height=170)
+        self.deployment_panel.pack(side="left", fill="both", expand=True, padx=(0, 2), pady=2)
+
+        # Re-using the existing TestResultsViewer slot as a compact chat feed.
+        self.test_results = TestResultsViewer(bottom_row, width=320, height=170)
+        self.test_results.pack(side="right", fill="both", expand=False, padx=(2, 0), pady=2)
 
     def _toggle_visibility(self) -> None:
         """Toggle sandbox viewer visibility."""
@@ -167,6 +166,9 @@ class SandboxViewer(ctk.CTkFrame):
             "prompt_detected": self._on_prompt_detected,
             "input_sent": self._on_input_sent,
             "test_output": self._on_test_output,
+            # Chat feed events
+            "chat_feed_append": self._on_chat_feed_append,
+            "chat_feed_clear": self._on_chat_feed_clear,
             # Deployment events
             "deployment_started": self._on_deployment_started,
             "deployment_complete": self._on_deployment_complete,
@@ -217,6 +219,9 @@ class SandboxViewer(ctk.CTkFrame):
         if code:
             # Remove chunk highlights when final code is set
             self.code_editor.dehighlight_last_chunk()
+
+            # Ensure the full code is visible even when generation wasn't streamed.
+            self.code_editor.set_code(code)
 
             # Update file path if available
             file_path = data.get("file_path")
@@ -269,8 +274,8 @@ class SandboxViewer(ctk.CTkFrame):
         count = data.get("count", 0)
         tests = data.get("tests", [])
 
-        # Clear previous tests
-        self.test_results.clear()
+        # Reset test stats (keep the chat feed transcript intact)
+        self.test_results.reset_tests()
         self.test_id_map.clear()
 
         # Add new tests
@@ -340,9 +345,17 @@ class SandboxViewer(ctk.CTkFrame):
 
     def _on_execution_line(self, data: dict) -> None:
         """Handle execution line output."""
-        line = data.get("line", "")
-        if line:
-            self.execution_console.log_line(line)
+        line = data.get("output") or data.get("line") or ""
+        if not line:
+            return
+
+        is_error = bool(data.get("is_error")) or data.get("source") in {"stderr", "error"}
+
+        if is_error:
+            self.execution_console.log_error(line.rstrip("\n"))
+        else:
+            # Keep raw formatting for stdout.
+            self.execution_console.log_line(line.rstrip("\n"))
 
     def _on_prompt_detected(self, data: dict) -> None:
         """Handle prompt detected."""
@@ -361,6 +374,23 @@ class SandboxViewer(ctk.CTkFrame):
         output = data.get("output", "")
         if output:
             self.execution_console.log_output(output)
+
+    def _on_chat_feed_append(self, data: dict) -> None:
+        """Append text into the compact chat feed panel."""
+        text = data.get("text", "")
+        role = data.get("role", "assistant")
+        if text:
+            try:
+                self.test_results.append_chat_text(text, role=role)
+            except Exception as e:
+                logger.debug(f"Failed to append chat feed text: {e}")
+
+    def _on_chat_feed_clear(self, data: dict) -> None:
+        """Clear the chat feed panel."""
+        try:
+            self.test_results.clear_feed()
+        except Exception:
+            self.test_results.clear()
 
     def _on_deployment_started(self, data: dict) -> None:
         """Handle deployment started."""

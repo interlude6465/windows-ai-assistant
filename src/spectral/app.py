@@ -86,9 +86,12 @@ class GUIApp(customtkinter.CTk):
             memory_module=memory_module,
         )
 
+        # One GUI callback for sandbox viewer updates (execution + chat feed)
+        self._sandbox_gui_callback = self.get_gui_callback()
+
         # Connect GUI callback to dual execution orchestrator for sandbox streaming
         if self.dual_execution_orchestrator:
-            self.dual_execution_orchestrator.gui_callback = self.get_gui_callback()
+            self.dual_execution_orchestrator.gui_callback = self._sandbox_gui_callback
 
         # GUI state
         self._processing = False
@@ -268,6 +271,20 @@ class GUIApp(customtkinter.CTk):
 
         return callback
 
+    def _emit_chat_feed_clear(self) -> None:
+        try:
+            self._sandbox_gui_callback("chat_feed_clear", {})
+        except Exception:
+            pass
+
+    def _emit_chat_feed_append(self, text: str, role: str) -> None:
+        if not text:
+            return
+        try:
+            self._sandbox_gui_callback("chat_feed_append", {"text": text, "role": role})
+        except Exception:
+            pass
+
     def _send_command(self) -> None:
         """Send the input command for processing."""
         if self._processing:
@@ -299,11 +316,15 @@ class GUIApp(customtkinter.CTk):
 
         # Display user message in chat BEFORE processing
         def show_user_message():
+            self._emit_chat_feed_clear()
+
             self.chat_text.configure(state="normal")
             self.chat_text.insert("end", f"[User] {command}\n", "user_message")
             self.chat_text.insert("end", "\n")
             self.chat_text.see("end")
             self.chat_text.configure(state="disabled")
+
+            self._emit_chat_feed_append(f"[User] {command}\n\n", role="user")
 
         self._run_on_ui_thread(show_user_message)
         self._processing = True
@@ -335,6 +356,8 @@ class GUIApp(customtkinter.CTk):
                 self.chat_text.see("end")
                 self.chat_text.configure(state="disabled")
 
+                self._emit_chat_feed_append("AI: ", role="assistant")
+
             self._run_on_ui_thread(_add_ai_prefix)
 
             cancelled = False
@@ -360,6 +383,8 @@ class GUIApp(customtkinter.CTk):
                     self.chat_text.see("end")
                     self.chat_text.configure(state="disabled")
 
+                    self._emit_chat_feed_append("\n[Cancelled]", role="system")
+
                 self._run_on_ui_thread(_append_cancelled)
 
             # Add newlines after response to separate conversation turns
@@ -368,6 +393,8 @@ class GUIApp(customtkinter.CTk):
                 self.chat_text.insert("end", "\n\n")
                 self.chat_text.see("end")
                 self.chat_text.configure(state="disabled")
+
+                self._emit_chat_feed_append("\n\n", role="system")
 
             self._run_on_ui_thread(_add_separator)
 
@@ -383,7 +410,7 @@ class GUIApp(customtkinter.CTk):
             error_msg = f"Error: {str(e)}"
 
             def _append_error(msg: str = error_msg) -> None:
-                self._append_chat_message(msg)
+                self._append_chat_message(msg, role="error")
 
             self._run_on_ui_thread(_append_error)
             logger.exception("Error processing command")
@@ -404,18 +431,16 @@ class GUIApp(customtkinter.CTk):
 
             self._run_on_ui_thread(reset_controls)
 
-    def _append_chat_message(self, text: str, is_streaming: bool = False) -> None:
-        """
-        Append text to the chat display.
-
-        Args:
-            text: Text to append
-            is_streaming: Whether this is streaming output
-        """
+    def _append_chat_message(
+        self, text: str, is_streaming: bool = False, role: str = "assistant"
+    ) -> None:
+        """Append text to the chat display."""
         self.chat_text.configure(state="normal")
         self.chat_text.insert("end", text)
         self.chat_text.see("end")
         self.chat_text.configure(state="disabled")
+
+        self._emit_chat_feed_append(text, role=role)
 
     def _toggle_voice(self) -> None:
         """Toggle voice input mode."""

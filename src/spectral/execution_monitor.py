@@ -12,7 +12,14 @@ import sys
 from typing import Any, Callable, Generator, List, Optional, Tuple
 
 from spectral.execution_models import CodeStep
-from spectral.utils import clean_code, detect_input_calls, generate_test_inputs
+from spectral.utils import (
+    build_utf8_subprocess_env,
+    clean_code,
+    detect_input_calls,
+    ensure_utf8_header,
+    generate_test_inputs,
+    sanitize_unicode_chars,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +119,9 @@ class ExecutionMonitor:
                 command,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=build_utf8_subprocess_env(),
                 timeout=timeout,
                 creationflags=creation_flags,
             )
@@ -188,6 +198,17 @@ class ExecutionMonitor:
         logger.debug("Parsing error from output")
 
         output_lower = output.lower()
+
+        # Unicode encoding issues (common on Windows cp1252/charmap)
+        if "unicodeencodeerror" in output_lower or (
+            "charmap" in output_lower and "codec can't encode character" in output_lower
+        ):
+            last_line = output.split("\n")[-2] if "\n" in output else output
+            return ("UnicodeEncodeError", last_line)
+
+        if "unicodedecodeerror" in output_lower:
+            last_line = output.split("\n")[-2] if "\n" in output else output
+            return ("UnicodeDecodeError", last_line)
 
         # Windows-specific error patterns
         if "winerror" in output_lower or "error:" in output_lower:
@@ -275,6 +296,7 @@ class ExecutionMonitor:
 
             # Clean markdown formatting from code before writing
             cleaned_code = clean_code(step.code)
+            cleaned_code = ensure_utf8_header(cleaned_code)
 
             # Check for input() calls
             input_count, prompts = detect_input_calls(cleaned_code)
@@ -284,9 +306,32 @@ class ExecutionMonitor:
                 logger.info(f"Detected {input_count} input() call(s), will use stdin support")
 
             # Write code to temp file
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-                f.write(cleaned_code)
-                temp_file = f.name
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".py",
+                    delete=False,
+                    encoding="utf-8",
+                    newline="\n",
+                ) as f:
+                    f.write(cleaned_code)
+                    temp_file = f.name
+            except UnicodeEncodeError as e:
+                logger.warning(
+                    "UnicodeEncodeError while writing script; falling back to sanitized ASCII code: %s",
+                    e,
+                )
+                sanitized = sanitize_unicode_chars(cleaned_code)
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    suffix=".py",
+                    delete=False,
+                    encoding="utf-8",
+                    errors="replace",
+                    newline="\n",
+                ) as f:
+                    f.write(sanitized)
+                    temp_file = f.name
 
             try:
                 # Emit execution started event
@@ -300,7 +345,7 @@ class ExecutionMonitor:
                     yield from self._execute_with_input_support(temp_file, timeout, prompts)
                 else:
                     # Execute shell command
-                    command = [sys.executable, temp_file]
+                    command = [sys.executable, "-X", "utf8", temp_file]
                     for line, source, is_error in self.stream_subprocess_output(
                         command, timeout=timeout
                     ):
@@ -375,11 +420,14 @@ class ExecutionMonitor:
 
             # Use Popen for stdin support
             process = subprocess.Popen(
-                [sys.executable, script_path],
+                [sys.executable, "-X", "utf8", script_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=build_utf8_subprocess_env(),
                 bufsize=1,
                 creationflags=creation_flags,
             )

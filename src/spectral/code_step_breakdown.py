@@ -186,6 +186,8 @@ Step descriptions should emphasize:
 - Error handling (try/except blocks)
 - No infinite loops (clear exit conditions)
 - Hard-coded test values (no input() calls)
+- Avoid Unicode-only math symbols in source/UI strings (e.g., √, ±, ∞). Prefer ASCII like "sqrt", "+/-", "inf".
+- If non-ASCII is truly required, include a UTF-8 coding cookie at the top of Python files: # -*- coding: utf-8 -*-
 
 ═══════════════════════════════════════════════════════════════════════════════
 📤 OUTPUT FORMAT

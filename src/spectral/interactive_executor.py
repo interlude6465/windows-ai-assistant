@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from spectral.utils import build_utf8_subprocess_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,11 +70,14 @@ class InteractiveExecutor:
         try:
             # Create subprocess
             process = subprocess.Popen(
-                [sys.executable, str(script_path)],
+                [sys.executable, "-X", "utf8", str(script_path)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=build_utf8_subprocess_env(),
                 bufsize=1,  # Line buffered
             )
 

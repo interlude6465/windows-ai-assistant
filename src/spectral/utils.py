@@ -415,3 +415,86 @@ def has_input_calls(code: str) -> bool:
                 return True
 
     return False
+
+
+def ensure_utf8_header(code: str) -> str:
+    """Ensure Python source has an explicit UTF-8 coding cookie.
+
+    This is primarily to protect Windows environments where other tooling might
+    open/write files using a non-UTF-8 default encoding.
+
+    If the code already has a PEP-263 encoding declaration in the first two
+    lines, it is left unchanged.
+    """
+
+    if not code:
+        return code
+
+    lines = code.splitlines()
+    first_two = "\n".join(lines[:2])
+    if re.search(r"coding[:=]\s*[-\w.]+", first_two):
+        return code
+
+    encoding_line = "# -*- coding: utf-8 -*-"
+
+    # Preserve shebang on the first line if present.
+    if lines and lines[0].startswith("#!"):
+        return "\n".join([lines[0], encoding_line] + lines[1:]) + ("\n" if code.endswith("\n") else "")
+
+    return "\n".join([encoding_line] + lines) + ("\n" if code.endswith("\n") else "")
+
+
+def sanitize_unicode_chars(code: str) -> str:
+    """Replace common Unicode math glyphs with ASCII-safe alternatives."""
+
+    if not code:
+        return code
+
+    replacements = {
+        "√": "sqrt",
+        "∞": 'float("inf")',
+        "±": "+/-",
+        "×": "*",
+        "÷": "/",
+        "−": "-",  # Unicode minus
+        "•": "*",
+        "→": "->",
+    }
+
+    for unicode_char, replacement in replacements.items():
+        code = code.replace(unicode_char, replacement)
+
+    return code
+
+
+def is_unicode_encoding_error(text: str) -> bool:
+    """Detect common Unicode encoding errors seen on Windows (cp1252/charmap)."""
+
+    if not text:
+        return False
+
+    lower = text.lower()
+    return any(
+        needle in lower
+        for needle in [
+            "charmap",
+            "codec can't encode character",
+            "unicodeencodeerror",
+            "unicodedecodeerror",
+            "can't encode character",
+        ]
+    )
+
+
+def build_utf8_subprocess_env(base_env=None) -> dict:
+    """Return an environment dict that forces UTF-8 I/O for Python subprocesses."""
+
+    import os
+
+    env = dict(base_env or os.environ)
+
+    # Ensure Python uses UTF-8 for stdio even on Windows.
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+
+    return env

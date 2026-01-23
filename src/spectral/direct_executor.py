@@ -30,8 +30,10 @@ from spectral.retry_parsing import format_attempt_progress, parse_retry_limit
 from spectral.utils import (
     AUTONOMOUS_CODE_REQUIREMENT,
     SmartInputHandler,
+    build_utf8_subprocess_env,
     clean_code,
     detect_input_calls,
+    ensure_utf8_header,
     generate_test_inputs,
     has_input_calls,
 )
@@ -883,6 +885,8 @@ class DirectCodeRunner:
                         [sys.executable, "-m", "pip", "install", pip_package],
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=120,
                     )
 
@@ -976,10 +980,13 @@ class DirectCodeRunner:
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
 
             process = subprocess.Popen(
-                [sys.executable, str(script_path)],
+                [sys.executable, "-X", "utf8", str(script_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=build_utf8_subprocess_env(),
                 creationflags=creation_flags,
             )
 
@@ -1074,19 +1081,25 @@ class DirectCodeRunner:
 
             if capture_output:
                 result = subprocess.run(
-                    [sys.executable, str(script_path)],
+                    [sys.executable, "-X", "utf8", str(script_path)],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=build_utf8_subprocess_env(),
                     timeout=timeout,
                     creationflags=creation_flags,
                 )
                 return result.returncode, result.stdout or "", result.stderr or ""
             else:
                 proc = subprocess.Popen(
-                    [sys.executable, str(script_path)],
+                    [sys.executable, "-X", "utf8", str(script_path)],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=build_utf8_subprocess_env(),
                     creationflags=creation_flags,
                 )
                 stdout, stderr = proc.communicate(timeout=timeout)
@@ -1235,6 +1248,8 @@ class DirectExecutor:
                 # Handle desktop save request
                 if save_to_desktop:
                     cleaned_code = self._modify_for_desktop_save(cleaned_code, user_request)
+
+                cleaned_code = ensure_utf8_header(cleaned_code)
 
                 logger.debug(
                     f"Generated {len(cleaned_code)} characters of {language} code (attempt {attempt + 1})"
@@ -2234,6 +2249,7 @@ Rules:
         try:
             code = self.llm_client.generate(prompt)
             cleaned_code = clean_code(str(code))
+            cleaned_code = ensure_utf8_header(cleaned_code)
             logger.debug(f"Generated fix for attempt {attempt}")
             return str(cleaned_code)
         except Exception as e:
@@ -2458,6 +2474,8 @@ Generate COMPLETE, WORKING code that will execute successfully on first try.
    - Always use 'with' context managers for file operations
    - Check if files exist before reading: Path(file).exists()
    - Handle permission errors gracefully
+   - Avoid Unicode-only symbols in source/UI strings (e.g., √, ±, ∞). Prefer ASCII like "sqrt", "+/-", "inf".
+   - If non-ASCII is truly required, include a UTF-8 coding cookie at the top: # -*- coding: utf-8 -*-
 
    SYSTEM CALLS:
    - Use subprocess.run() with timeout parameter
