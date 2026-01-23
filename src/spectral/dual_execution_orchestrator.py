@@ -52,7 +52,7 @@ class DualExecutionOrchestrator:
         self.llm_client = llm_client
         self.mistake_learner = mistake_learner or MistakeLearner()
         self.memory_module = memory_module
-        self.gui_callback = gui_callback
+        self._gui_callback = gui_callback
         self.router = ExecutionRouter()
         self.direct_executor = DirectExecutor(
             llm_client, self.mistake_learner, memory_module, gui_callback
@@ -63,6 +63,20 @@ class DualExecutionOrchestrator:
         self.adaptive_fix_engine = AdaptiveFixEngine(llm_client, self.mistake_learner)
         self.research_handler = ResearchIntentHandler()
         logger.info("DualExecutionOrchestrator initialized")
+
+    @property
+    def gui_callback(self) -> Optional[Callable[..., None]]:
+        """Get the GUI callback."""
+        return self._gui_callback
+
+    @gui_callback.setter
+    def gui_callback(self, value: Optional[Callable[..., None]]) -> None:
+        """Set the GUI callback and propagate to sub-components."""
+        self._gui_callback = value
+        if hasattr(self, "direct_executor"):
+            self.direct_executor.gui_callback = value
+        if hasattr(self, "execution_monitor"):
+            self.execution_monitor.set_gui_callback(value)
 
     def process_request(
         self, user_input: str, max_attempts: Optional[int] = None
