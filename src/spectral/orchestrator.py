@@ -104,14 +104,14 @@ class Orchestrator:
                             "command": command,
                             "message": action_result.message
                             or f"Command '{command}' executed successfully",
-                            "data": action_result.output,
+                            "data": action_result.data,
                         }
                     elif action_result:
                         return {
                             "status": "error",
                             "command": command,
                             "message": action_result.message or f"Command '{command}' failed",
-                            "data": action_result.output,
+                            "data": action_result.data,
                         }
             except Exception as e:
                 logger.warning(f"Failed to execute command via system_action_router: {e}")
@@ -448,7 +448,7 @@ class Orchestrator:
                     ),
                     "data": {
                         "generated_code": code,
-                        "output": result.output,
+                        "output": result.data.get("output") if result.data else None,
                         "error": result.error,
                     },
                     "verification_status": "verified" if result.success else "failed",
@@ -1202,7 +1202,7 @@ Generate the code now:"""
                     success=success,
                     action_type="code_execution",
                     message=f"Code executed with return code {result.returncode}",
-                    output=output,
+                    data={"output": output} if output else None,
                     error=error,
                 )
 
@@ -1225,7 +1225,7 @@ Generate the code now:"""
                     success=success,
                     action_type="code_execution",
                     message=f"Shell code executed with return code {result.returncode}",
-                    output=output,
+                    data={"output": output} if output else None,
                     error=error,
                 )
 
@@ -1247,7 +1247,7 @@ Generate the code now:"""
                     success=success,
                     action_type="code_execution",
                     message=f"PowerShell code executed with return code {result.returncode}",
-                    output=output,
+                    data={"output": output} if output else None,
                     error=error,
                 )
 
