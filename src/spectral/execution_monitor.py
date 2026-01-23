@@ -1,479 +1,526 @@
 """
-Execution monitor module for real-time code execution monitoring.
+Execution Monitor - Tracks active sessions and listeners for metasploit operations.
 
-Streams subprocess output, detects failures during execution, and validates
-step output against expected patterns.
+Monitors:
+- Active metasploit sessions
+- Running listeners/handlers
+- Command execution history
+- Session lifecycle events
+- Real-time status updates
 """
 
 import logging
-import re
-import subprocess
-import sys
-from typing import Any, Callable, Generator, List, Optional, Tuple
+import threading
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable, Dict, List, Optional
 
-from spectral.execution_models import CodeStep
-from spectral.utils import (
-    build_utf8_subprocess_env,
-    clean_code,
-    detect_input_calls,
-    ensure_utf8_header,
-    generate_test_inputs,
-    sanitize_unicode_chars,
-)
+from spectral.metasploit_executor import ListenerInfo, SessionInfo
 
 logger = logging.getLogger(__name__)
 
 
+class SessionState(Enum):
+    """States of a metasploit session."""
+
+    CREATING = "creating"
+    ACTIVE = "active"
+    IDLE = "idle"
+    CLOSING = "closing"
+    CLOSED = "closed"
+
+
+class ListenerState(Enum):
+    """States of a metasploit listener."""
+
+    STARTING = "starting"
+    ACTIVE = "active"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+
+
+@dataclass
+class TrackedSession:
+    """Tracked metasploit session with state and metadata."""
+
+    session_info: SessionInfo
+    state: SessionState = SessionState.CREATING
+    created_at: float = field(default_factory=time.time)
+    last_activity: float = field(default_factory=time.time)
+    command_count: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    metadata: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class TrackedListener:
+    """Tracked metasploit listener with state and metadata."""
+
+    listener_info: ListenerInfo
+    state: ListenerState = ListenerState.STARTING
+    created_at: float = field(default_factory=time.time)
+    connection_count: int = 0
+    metadata: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ExecutionEvent:
+    """Event in the execution history."""
+
+    timestamp: float
+    event_type: str  # "session_created", "session_closed", "listener_started", etc.
+    event_data: Dict[str, str]
+    description: str
+
+
 class ExecutionMonitor:
     """
-    Monitors code execution in real-time.
+    Monitors and tracks metasploit execution state.
 
-    Detects failures DURING execution (not after) and validates output.
+    Features:
+    - Real-time session tracking
+    - Listener monitoring
+    - Event history
+    - State management
+    - Status callbacks
     """
 
-    # Error keywords to detect in output
-    ERROR_KEYWORDS = [
-        "Error",
-        "Exception",
-        "Traceback",
-        "Failed",
-        "failed",
-        "error",
-        "exception",
-        "traceback",
-        "SyntaxError",
-        "ImportError",
-        "RuntimeError",
-        "TypeError",
-        "ValueError",
-        "NameError",
-        "AttributeError",
-        "KeyError",
-        "ConnectionError",
-        "TimeoutError",
-        "PermissionError",
-        "FileNotFoundError",
-        "ModuleNotFoundError",
-    ]
-
-    def __init__(self) -> None:
+    def __init__(self):
         """Initialize the execution monitor."""
-        self.gui_callback: Optional[Callable[..., Any]] = None
+        self.active_sessions: Dict[str, TrackedSession] = {}
+        self.active_listeners: Dict[str, TrackedListener] = {}
+        self.execution_history: List[ExecutionEvent] = []
+        self.status_callbacks: List[Callable[[str, Dict], None]] = []
+
+        # Threading
+        self._monitoring = False
+        self._monitor_thread = None
+        self._lock = threading.RLock()
+
         logger.info("ExecutionMonitor initialized")
 
-    def set_gui_callback(self, gui_callback: Optional[Callable[..., Any]] = None) -> None:
+    def add_status_callback(self, callback: Callable[[str, Dict], None]) -> None:
         """
-        Set the GUI callback for sandbox viewer updates.
+        Add a callback for status updates.
 
         Args:
-            gui_callback: Optional callback function
+            callback: Function to call with status updates
         """
-        self.gui_callback = gui_callback
+        with self._lock:
+            self.status_callbacks.append(callback)
 
-    def _emit_gui_event(self, event_type: str, data: dict) -> None:
+    def remove_status_callback(self, callback: Callable[[str, Dict], None]) -> None:
         """
-        Emit an event to the GUI callback (sandbox viewer).
+        Remove a status callback.
 
         Args:
-            event_type: Type of event
-            data: Event data dictionary
+            callback: Callback to remove
         """
-        if self.gui_callback:
+        with self._lock:
+            if callback in self.status_callbacks:
+                self.status_callbacks.remove(callback)
+
+    def start_monitoring(self) -> None:
+        """Start the monitoring thread."""
+        if self._monitoring:
+            return
+
+        self._monitoring = True
+        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitor_thread.start()
+
+        logger.info("Execution monitoring started")
+
+    def stop_monitoring(self) -> None:
+        """Stop the monitoring thread."""
+        self._monitoring = False
+        if self._monitor_thread:
+            self._monitor_thread.join(timeout=2.0)
+
+        logger.info("Execution monitoring stopped")
+
+    def _monitor_loop(self) -> None:
+        """Main monitoring loop."""
+        while self._monitoring:
             try:
-                self.gui_callback(event_type, data)
+                self._update_session_states()
+                self._check_for_inactive_sessions()
+                self._emit_status_update()
+                time.sleep(1.0)  # Check every second
             except Exception as e:
-                logger.debug(f"GUI callback error: {e}")
+                logger.error(f"Error in monitoring loop: {e}")
+                time.sleep(5.0)  # Wait longer on error
 
-    def stream_subprocess_output(
-        self,
-        command: List[str],
-        timeout: int = 30,
-        capture_stderr: bool = True,
-    ) -> Generator[Tuple[str, str, bool], None, None]:
-        """
-        Execute subprocess and yield (output_line, source, is_error) tuples.
+    def _update_session_states(self) -> None:
+        """Update states of active sessions."""
+        current_time = time.time()
 
-        Uses subprocess.run() for Windows compatibility, avoiding WinError 10038.
+        with self._lock:
+            for session_id, tracked_session in self.active_sessions.items():
+                # Update last activity
+                if tracked_session.state == SessionState.ACTIVE:
+                    # Check if session is still responsive (simplified check)
+                    # In real implementation, would ping the session
+                    if current_time - tracked_session.last_activity > 300:  # 5 minutes
+                        tracked_session.state = SessionState.IDLE
 
-        Args:
-            command: Command to execute (as list of strings)
-            timeout: Execution timeout in seconds
-            capture_stderr: Whether to capture stderr
+    def _check_for_inactive_sessions(self) -> None:
+        """Check for sessions that should be marked as closed."""
+        current_time = time.time()
 
-        Yields:
-            Tuples of (line, source, is_error) where:
-            - line: Output line
-            - source: "stdout" or "stderr"
-            - is_error: Whether this line indicates an error
-        """
-        logger.info(f"Streaming subprocess output for: {' '.join(command)}")
+        with self._lock:
+            sessions_to_close = []
 
-        try:
-            # Windows-specific subprocess creation
-            creation_flags = 0
-            if sys.platform == "win32":
-                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+            for session_id, tracked_session in self.active_sessions.items():
+                # Close sessions that have been idle for too long
+                if (
+                    tracked_session.state == SessionState.IDLE
+                    and current_time - tracked_session.last_activity > 1800
+                ):  # 30 minutes
+                    sessions_to_close.append(session_id)
 
-            # Use subprocess.run() instead of Popen for better Windows compatibility
-            process = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=build_utf8_subprocess_env(),
-                timeout=timeout,
-                creationflags=creation_flags,
-            )
+            # Close the identified sessions
+            for session_id in sessions_to_close:
+                self._close_session(session_id, reason="timeout")
 
-            # Yield stdout line by line
-            if process.stdout:
-                for line in process.stdout.split("\n"):
-                    if line.strip():
-                        is_error = self._is_error_line(line)
-                        logger.debug(f"stdout: {line}")
-                        yield (line, "stdout", is_error)
+    def _emit_status_update(self) -> None:
+        """Emit status update to all callbacks."""
+        with self._lock:
+            status_data = {
+                "active_sessions": len(self.active_sessions),
+                "active_listeners": len(self.active_listeners),
+                "sessions": {
+                    sid: {
+                        "type": ts.session_info.session_type,
+                        "target": ts.session_info.target_ip,
+                        "state": ts.state.value,
+                        "age": time.time() - ts.created_at,
+                    }
+                    for sid, ts in self.active_sessions.items()
+                },
+                "listeners": {
+                    lid: {
+                        "payload": tl.listener_info.payload,
+                        "endpoint": f"{tl.listener_info.lhost}:{tl.listener_info.lport}",
+                        "state": tl.state.value,
+                        "connections": tl.connection_count,
+                    }
+                    for lid, tl in self.active_listeners.items()
+                },
+            }
 
-            # Yield stderr line by line if captured
-            if capture_stderr and process.stderr:
-                for line in process.stderr.split("\n"):
-                    if line.strip():
-                        logger.debug(f"stderr: {line}")
-                        yield (line, "stderr", True)  # stderr is always error
-
-            # If process exited with error code, report it
-            if process.returncode != 0:
-                yield (f"Process exited with code {process.returncode}", "error", True)
-
-        except subprocess.TimeoutExpired:
-            logger.warning(f"Subprocess execution timeout after {timeout}s")
-            yield (f"Execution timed out after {timeout} seconds", "error", True)
-        except Exception as e:
-            logger.error(f"Error executing subprocess: {e}", exc_info=True)
-            yield (f"Execution error: {str(e)}", "error", True)
-
-    def validate_step_output(self, output: str, step: CodeStep) -> Tuple[bool, Optional[str]]:
-        """
-        Validate step output against expected patterns.
-
-        Args:
-            output: Combined output from step execution
-            step: CodeStep with expected_output_pattern
-
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        logger.debug(f"Validating output for step {step.step_number}")
-
-        # If no pattern specified, assume valid
-        if not step.expected_output_pattern:
-            return True, None
-
-        try:
-            pattern = re.compile(step.expected_output_pattern)
-            if pattern.search(output):
-                logger.debug(f"Step {step.step_number} output matches pattern")
-                return True, None
-            else:
-                error_msg = (
-                    f"Output does not match expected pattern: {step.expected_output_pattern}"
-                )
-                logger.warning(f"Step {step.step_number} validation failed: {error_msg}")
-                return False, error_msg
-        except re.error as e:
-            logger.error(f"Invalid regex pattern in step {step.step_number}: {e}")
-            return False, f"Invalid validation pattern: {e}"
-
-    def parse_error_from_output(self, output: str) -> Tuple[str, str]:
-        """
-        Parse failure reason from combined stdout/stderr.
-        Windows-compatible error parsing.
-
-        Args:
-            output: Combined output from execution
-
-        Returns:
-            Tuple of (error_type, error_details)
-        """
-        logger.debug("Parsing error from output")
-
-        output_lower = output.lower()
-
-        # Unicode encoding issues (common on Windows cp1252/charmap)
-        if "unicodeencodeerror" in output_lower or (
-            "charmap" in output_lower and "codec can't encode character" in output_lower
-        ):
-            last_line = output.split("\n")[-2] if "\n" in output else output
-            return ("UnicodeEncodeError", last_line)
-
-        if "unicodedecodeerror" in output_lower:
-            last_line = output.split("\n")[-2] if "\n" in output else output
-            return ("UnicodeDecodeError", last_line)
-
-        # Windows-specific error patterns
-        if "winerror" in output_lower or "error:" in output_lower:
-            # Extract WinError details
-            winerror_match = re.search(r"\[WinError (\d+)\] (.*?)(?:\n|$)", output)
-            if winerror_match:
-                error_code = winerror_match.group(1)
-                error_msg = winerror_match.group(2)
-                return ("WinError", f"Error {error_code}: {error_msg}")
-
-        # Common Python errors
-        if "importerror" in output_lower:
-            return ("ImportError", output.split("\n")[-2] if "\n" in output else output)
-        if "syntaxerror" in output_lower:
-            return ("SyntaxError", output.split("\n")[-2] if "\n" in output else output)
-        if "typeerror" in output_lower:
-            return ("TypeError", output.split("\n")[-2] if "\n" in output else output)
-        if "attributeerror" in output_lower:
-            return ("AttributeError", output.split("\n")[-2] if "\n" in output else output)
-        if "permissionerror" in output_lower:
-            return ("PermissionError", output.split("\n")[-2] if "\n" in output else output)
-        if "timeout" in output_lower or "timed out" in output_lower:
-            return ("TimeoutError", "Operation timed out")
-        if "connectionerror" in output_lower or "connection" in output_lower:
-            return ("ConnectionError", output.split("\n")[-2] if "\n" in output else output)
-
-        # Generic error keywords
-        if "traceback" in output_lower:
-            lines = output.split("\n")
-            return ("RuntimeError", lines[-2] if len(lines) > 1 else output)
-        if "exception" in output_lower:
-            lines = output.split("\n")
-            return ("Exception", lines[-2] if len(lines) > 1 else output)
-        if "failed" in output_lower:
-            lines = output.split("\n")
-            return ("ExecutionError", lines[-2] if len(lines) > 1 else output)
-
-        return ("Error", output[:200])  # First 200 chars as fallback
-
-    def _is_error_line(self, line: str) -> bool:
-        """
-        Check if a line indicates an error.
-
-        Args:
-            line: Output line to check
-
-        Returns:
-            True if line indicates an error
-        """
-        line_lower = line.lower()
-        for keyword in self.ERROR_KEYWORDS:
-            if keyword.lower() in line_lower:
-                return True
-        return False
-
-    def execute_step(
-        self, step: CodeStep, timeout: Optional[int] = None
-    ) -> Generator[Tuple[str, bool, Optional[str]], None, None]:
-        """
-        Execute a single step with monitoring.
-
-        Args:
-            step: CodeStep to execute
-            timeout: Optional timeout override
-
-        Yields:
-            Tuples of (output_line, is_error, error_message_if_any)
-        """
-        if timeout is None:
-            timeout = step.timeout_seconds
-
-        logger.info(f"Executing step {step.step_number}: {step.description}")
-
-        if step.code:
-            # Emit code generation event to sandbox viewer
-            self._emit_gui_event(
-                "code_generated",
-                {"code": step.code, "step_number": step.step_number, "language": "python"},
-            )
-
-            # Execute code (write to temp file and run)
-            import os
-            import tempfile
-            from datetime import datetime
-
-            # Clean markdown formatting from code before writing
-            cleaned_code = clean_code(step.code)
-            cleaned_code = ensure_utf8_header(cleaned_code)
-
-            # Check for input() calls
-            input_count, prompts = detect_input_calls(cleaned_code)
-            has_interactive = input_count > 0
-
-            if has_interactive:
-                logger.info(f"Detected {input_count} input() call(s), will use stdin support")
-
-            # Write code to temp file
+        # Emit to callbacks
+        for callback in self.status_callbacks:
             try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    suffix=".py",
-                    delete=False,
-                    encoding="utf-8",
-                    newline="\n",
-                ) as f:
-                    f.write(cleaned_code)
-                    temp_file = f.name
-            except UnicodeEncodeError as e:
-                logger.warning(
-                    "UnicodeEncodeError while writing script; falling back to sanitized ASCII code: %s",
-                    e,
-                )
-                sanitized = sanitize_unicode_chars(cleaned_code)
-                with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    suffix=".py",
-                    delete=False,
-                    encoding="utf-8",
-                    errors="replace",
-                    newline="\n",
-                ) as f:
-                    f.write(sanitized)
-                    temp_file = f.name
+                callback("status_update", status_data)
+            except Exception as e:
+                logger.error(f"Error in status callback: {e}")
 
-            try:
-                # Emit execution started event
-                self._emit_gui_event(
-                    "execution_started",
-                    {"step_number": step.step_number, "timestamp": datetime.now().isoformat()},
-                )
-
-                if has_interactive:
-                    # Execute with stdin support for interactive programs
-                    yield from self._execute_with_input_support(temp_file, timeout, prompts)
-                else:
-                    # Execute shell command
-                    command = [sys.executable, "-X", "utf8", temp_file]
-                    for line, source, is_error in self.stream_subprocess_output(
-                        command, timeout=timeout
-                    ):
-                        # Emit execution line to sandbox viewer with proper format
-                        self._emit_gui_event(
-                            "execution_line",
-                            {
-                                "step_number": step.step_number,
-                                "output": line,
-                                "source": source,
-                                "is_error": is_error,
-                                "timestamp": datetime.now().isoformat(),
-                            },
-                        )
-                        yield (line, is_error, None)
-
-                # Emit execution completed event
-                self._emit_gui_event(
-                    "execution_completed",
-                    {
-                        "step_number": step.step_number,
-                        "status": "success",
-                        "timestamp": datetime.now().isoformat(),
-                    },
-                )
-            finally:
-                # Clean up temp file
-                try:
-                    os.unlink(temp_file)
-                except Exception:
-                    pass
-
-        elif step.command:
-            # Execute shell command
-            for line, source, is_error in self.stream_subprocess_output(
-                step.command, timeout=timeout
-            ):
-                yield (line, is_error, None)
-        else:
-            error_msg = f"Step {step.step_number} has no code or command to execute"
-            logger.error(error_msg)
-            yield (error_msg, True, error_msg)
-
-    def _execute_with_input_support(
-        self,
-        script_path: str,
-        timeout: int,
-        prompts: List[str],
-    ) -> Generator[Tuple[str, bool, Optional[str]], None, None]:
+    def track_session_created(self, session_info: SessionInfo) -> str:
         """
-        Execute a script with stdin support for interactive programs.
+        Track a newly created session.
 
         Args:
-            script_path: Path to the script to execute
-            timeout: Execution timeout in seconds
-            prompts: List of prompts from input() calls
+            session_info: Information about the created session
 
-        Yields:
-            Tuples of (output_line, is_error, error_message_if_any)
+        Returns:
+            Session ID
         """
-        from datetime import datetime
+        session_id = session_info.session_id
 
-        # Generate test inputs based on prompts
-        test_inputs = generate_test_inputs(prompts)
-        logger.info(f"Generated test inputs for execution: {test_inputs}")
+        with self._lock:
+            tracked_session = TrackedSession(session_info=session_info)
+            self.active_sessions[session_id] = tracked_session
 
-        try:
-            # Windows-specific subprocess creation
-            creation_flags = 0
-            if sys.platform == "win32":
-                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+            # Add to history
+            event = ExecutionEvent(
+                timestamp=time.time(),
+                event_type="session_created",
+                event_data={
+                    "session_id": session_id,
+                    "session_type": session_info.session_type,
+                    "target_ip": session_info.target_ip,
+                },
+                description=f"Session {session_id} created ({session_info.session_type})",
+            )
+            self.execution_history.append(event)
 
-            # Use Popen for stdin support
-            process = subprocess.Popen(
-                [sys.executable, "-X", "utf8", script_path],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=build_utf8_subprocess_env(),
-                bufsize=1,
-                creationflags=creation_flags,
+            # Emit callback
+            self._emit_event_callback(
+                "session_created",
+                {"session_id": session_id, "session_info": session_info.__dict__},
             )
 
-            # Send all inputs joined with newlines
-            input_data = "\n".join(test_inputs) + "\n"
-            if process.stdin:
-                process.stdin.write(input_data)
-                process.stdin.flush()
+        logger.info(f"Tracking session {session_id} ({session_info.session_type})")
+        return session_id
 
-            # Read output in real-time
-            while True:
-                if process.stdout:
-                    line = process.stdout.readline()
+    def track_session_closed(self, session_id: str, reason: str = "unknown") -> bool:
+        """
+        Track a closed session.
+
+        Args:
+            session_id: ID of the closed session
+            reason: Reason for closure
+
+        Returns:
+            True if session was tracked and closed
+        """
+        with self._lock:
+            if session_id not in self.active_sessions:
+                return False
+
+            tracked_session = self.active_sessions[session_id]
+            tracked_session.state = SessionState.CLOSED
+
+            # Add to history
+            event = ExecutionEvent(
+                timestamp=time.time(),
+                event_type="session_closed",
+                event_data={
+                    "session_id": session_id,
+                    "reason": reason,
+                    "lifetime": time.time() - tracked_session.created_at,
+                    "command_count": tracked_session.command_count,
+                },
+                description=f"Session {session_id} closed ({reason})",
+            )
+            self.execution_history.append(event)
+
+            # Remove from active sessions
+            del self.active_sessions[session_id]
+
+            # Emit callback
+            self._emit_event_callback(
+                "session_closed", {"session_id": session_id, "reason": reason}
+            )
+
+        logger.info(f"Closed tracking for session {session_id}")
+        return True
+
+    def track_listener_started(self, listener_info: ListenerInfo) -> str:
+        """
+        Track a newly started listener.
+
+        Args:
+            listener_info: Information about the started listener
+
+        Returns:
+            Listener ID
+        """
+        listener_id = listener_info.handler_id
+
+        with self._lock:
+            tracked_listener = TrackedListener(listener_info=listener_info)
+            self.active_listeners[listener_id] = tracked_listener
+
+            # Add to history
+            event = ExecutionEvent(
+                timestamp=time.time(),
+                event_type="listener_started",
+                event_data={
+                    "listener_id": listener_id,
+                    "payload": listener_info.payload,
+                    "endpoint": f"{listener_info.lhost}:{listener_info.lport}",
+                },
+                description=f"Listener {listener_id} started ({listener_info.payload})",
+            )
+            self.execution_history.append(event)
+
+            # Emit callback
+            self._emit_event_callback(
+                "listener_started",
+                {"listener_id": listener_id, "listener_info": listener_info.__dict__},
+            )
+
+        logger.info(f"Tracking listener {listener_id} ({listener_info.payload})")
+        return listener_id
+
+    def track_listener_stopped(self, listener_id: str, reason: str = "unknown") -> bool:
+        """
+        Track a stopped listener.
+
+        Args:
+            listener_id: ID of the stopped listener
+            reason: Reason for stopping
+
+        Returns:
+            True if listener was tracked and stopped
+        """
+        with self._lock:
+            if listener_id not in self.active_listeners:
+                return False
+
+            tracked_listener = self.active_listeners[listener_id]
+            tracked_listener.state = ListenerState.STOPPED
+
+            # Add to history
+            event = ExecutionEvent(
+                timestamp=time.time(),
+                event_type="listener_stopped",
+                event_data={
+                    "listener_id": listener_id,
+                    "reason": reason,
+                    "lifetime": time.time() - tracked_listener.created_at,
+                    "connection_count": tracked_listener.connection_count,
+                },
+                description=f"Listener {listener_id} stopped ({reason})",
+            )
+            self.execution_history.append(event)
+
+            # Remove from active listeners
+            del self.active_listeners[listener_id]
+
+            # Emit callback
+            self._emit_event_callback(
+                "listener_stopped", {"listener_id": listener_id, "reason": reason}
+            )
+
+        logger.info(f"Stopped tracking listener {listener_id}")
+        return True
+
+    def update_session_activity(
+        self, session_id: str, command_executed: bool = True, success: bool = True
+    ) -> bool:
+        """
+        Update session activity and statistics.
+
+        Args:
+            session_id: ID of the session
+            command_executed: Whether a command was executed
+            success: Whether the command was successful
+
+        Returns:
+            True if session was found and updated
+        """
+        with self._lock:
+            if session_id not in self.active_sessions:
+                return False
+
+            tracked_session = self.active_sessions[session_id]
+            tracked_session.last_activity = time.time()
+
+            if command_executed:
+                tracked_session.command_count += 1
+                if success:
+                    tracked_session.success_count += 1
                 else:
-                    line = ""
+                    tracked_session.error_count += 1
 
-                if not line and process.poll() is not None:
-                    break
+            # Update state based on activity
+            if tracked_session.state == SessionState.IDLE:
+                tracked_session.state = SessionState.ACTIVE
 
-                if line:
-                    is_error = self._is_error_line(line)
-                    # Emit execution line to sandbox viewer with proper format
-                    self._emit_gui_event(
-                        "execution_line",
-                        {
-                            "step_number": 1,  # Default step number for interactive execution
-                            "output": line,
-                            "source": "stdout",
-                            "is_error": is_error,
-                            "timestamp": datetime.now().isoformat(),
-                        },
-                    )
-                    yield (line, is_error, None)
-                    logger.debug(f"stdout: {line.rstrip()}")
+            return True
 
-            # Get exit code
-            exit_code = process.wait(timeout=5)
-            logger.info(f"Process exited with code {exit_code}")
+    def increment_listener_connections(self, listener_id: str) -> bool:
+        """
+        Increment connection count for a listener.
 
-            if exit_code != 0:
-                yield (f"Process exited with code {exit_code}", True, None)
+        Args:
+            listener_id: ID of the listener
 
-        except subprocess.TimeoutExpired:
-            logger.warning(f"Script execution timeout after {timeout}s")
-            yield (f"Execution timed out after {timeout} seconds", True, None)
-        except Exception as e:
-            logger.error(f"Failed to execute script: {e}")
-            yield (f"Execution error: {str(e)}", True, None)
+        Returns:
+            True if listener was found and updated
+        """
+        with self._lock:
+            if listener_id not in self.active_listeners:
+                return False
+
+            tracked_listener = self.active_listeners[listener_id]
+            tracked_listener.connection_count += 1
+
+            return True
+
+    def get_active_sessions(self) -> Dict[str, TrackedSession]:
+        """Get all active sessions."""
+        with self._lock:
+            return self.active_sessions.copy()
+
+    def get_active_listeners(self) -> Dict[str, TrackedListener]:
+        """Get all active listeners."""
+        with self._lock:
+            return self.active_listeners.copy()
+
+    def get_execution_history(self, limit: int = 100) -> List[ExecutionEvent]:
+        """
+        Get execution history.
+
+        Args:
+            limit: Maximum number of events to return
+
+        Returns:
+            List of execution events
+        """
+        with self._lock:
+            return self.execution_history[-limit:]
+
+    def get_session_summary(self) -> Dict[str, any]:
+        """
+        Get a summary of all tracked sessions.
+
+        Returns:
+            Summary dictionary
+        """
+        with self._lock:
+            total_sessions = len(self.active_sessions)
+            total_commands = sum(
+                ts.command_count for ts in self.active_sessions.values()
+            )
+            total_success = sum(
+                ts.success_count for ts in self.active_sessions.values()
+            )
+            total_errors = sum(ts.error_count for ts in self.active_sessions.values())
+
+            return {
+                "active_sessions": total_sessions,
+                "total_commands": total_commands,
+                "successful_commands": total_success,
+                "failed_commands": total_errors,
+                "success_rate": (total_success / max(total_commands, 1)) * 100,
+            }
+
+    def get_listener_summary(self) -> Dict[str, any]:
+        """
+        Get a summary of all tracked listeners.
+
+        Returns:
+            Summary dictionary
+        """
+        with self._lock:
+            total_listeners = len(self.active_listeners)
+            total_connections = sum(
+                tl.connection_count for tl in self.active_listeners.values()
+            )
+
+            return {
+                "active_listeners": total_listeners,
+                "total_connections": total_connections,
+            }
+
+    def _emit_event_callback(self, event_type: str, event_data: Dict[str, str]) -> None:
+        """Emit event to status callbacks."""
+        for callback in self.status_callbacks:
+            try:
+                callback(event_type, event_data)
+            except Exception as e:
+                logger.error(f"Error in event callback: {e}")
+
+    def cleanup_all(self) -> None:
+        """Cleanup all tracked sessions and listeners."""
+        with self._lock:
+            # Close all active sessions
+            session_ids = list(self.active_sessions.keys())
+            for session_id in session_ids:
+                self.track_session_closed(session_id, reason="cleanup")
+
+            # Stop all active listeners
+            listener_ids = list(self.active_listeners.keys())
+            for listener_id in listener_ids:
+                self.track_listener_stopped(listener_id, reason="cleanup")
+
+            # Stop monitoring
+            self.stop_monitoring()
+
+        logger.info("Execution monitor cleanup completed")

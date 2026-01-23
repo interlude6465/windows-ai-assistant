@@ -2,14 +2,22 @@
 Sandbox viewer main container for all sandbox visualization panels.
 
 Integrates:
-- LiveCodeEditor: Shows code being generated
+- LiveCodeEditor: Shows code being generated (smaller font for terminal mode)
 - ExecutionConsole: Shows program execution output
 - TestResultsViewer: Shows test progress and results
 - StatusPanel: Shows execution steps and progress
 - DeploymentPanel: Shows deployment success
+- TerminalEmulator: Live terminal display for metasploit execution
+
+Features:
+- Terminal mode detection (when metasploit commands run)
+- Dynamic UI transformation between code view and terminal view
+- Session and listener visualization
+- Real-time command/output streaming
 """
 
 import logging
+import re
 from typing import Optional
 
 import customtkinter as ctk
@@ -18,6 +26,7 @@ from spectral.gui.deployment_panel import DeploymentPanel
 from spectral.gui.execution_console import ExecutionConsole
 from spectral.gui.live_code_editor import LiveCodeEditor
 from spectral.gui.status_panel import StatusPanel
+from spectral.gui.terminal_emulator import TerminalEmulator, TerminalManager
 from spectral.gui.test_results_viewer import TestResultsViewer
 
 logger = logging.getLogger(__name__)
@@ -31,7 +40,9 @@ class SandboxViewer(ctk.CTkFrame):
     - All sub-panels integrated in a cohesive layout
     - Event routing based on event_type
     - Real-time updates via gui_callback
-    - Collapsible/expandable sections
+    - Terminal mode detection and transformation
+    - Dynamic layout switching (code view ↔ terminal view)
+    - Session and listener visualization
     """
 
     # Layout constants
@@ -61,6 +72,11 @@ class SandboxViewer(ctk.CTkFrame):
         self.timer_running = False
         self.timer_thread = None
 
+        # Terminal mode state
+        self.terminal_mode = False
+        self.metasploit_active = False
+        self.terminal_manager = TerminalManager()
+
         # Setup UI
         self._setup_ui()
 
@@ -68,20 +84,7 @@ class SandboxViewer(ctk.CTkFrame):
 
     def _setup_ui(self) -> None:
         """Set up the UI layout."""
-        # Toggle button at top
-        self.toggle_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.toggle_frame.pack(fill="x", padx=5, pady=5)
-
-        self.toggle_button = ctk.CTkButton(
-            self.toggle_frame,
-            text="▼ Hide Sandbox Viewer",
-            command=self._toggle_visibility,
-            height=30,
-            font=("Arial", 11, "bold"),
-        )
-        self.toggle_button.pack(fill="x", padx=5)
-
-        # Main content frame (shown/hidden)
+        # Main content frame - always visible (no toggle button)
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.content_frame.pack(fill="both", expand=True)
 
@@ -90,11 +93,20 @@ class SandboxViewer(ctk.CTkFrame):
 
     def _create_panels(self) -> None:
         """Create all visualization panels."""
+
+        # Check if we should start in terminal mode
+        if self.terminal_mode:
+            self._create_terminal_panels()
+        else:
+            self._create_code_panels()
+
+    def _create_code_panels(self) -> None:
+        """Create panels for code view mode."""
         # Top row: Code editor (left) + Status panel (right)
         top_row = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         top_row.pack(fill="both", expand=True, padx=5, pady=2)
 
-        # Code editor (main focus)
+        # Code editor (main focus) - smaller font as requested
         self.code_editor = LiveCodeEditor(top_row, width=650, height=260)
         self.code_editor.pack(side="left", fill="both", expand=True, padx=(0, 2))
 
@@ -102,7 +114,7 @@ class SandboxViewer(ctk.CTkFrame):
         self.status_panel = StatusPanel(top_row, width=250, height=260)
         self.status_panel.pack(side="right", fill="both", expand=False, padx=(2, 0))
 
-        # Middle row: Execution console (as before)
+        # Middle row: Execution console
         middle_row = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         middle_row.pack(fill="both", expand=True, padx=5, pady=2)
 
@@ -114,22 +126,142 @@ class SandboxViewer(ctk.CTkFrame):
         bottom_row.pack(fill="x", padx=5, pady=2)
 
         self.deployment_panel = DeploymentPanel(bottom_row, height=170)
-        self.deployment_panel.pack(side="left", fill="both", expand=True, padx=(0, 2), pady=2)
+        self.deployment_panel.pack(
+            side="left", fill="both", expand=True, padx=(0, 2), pady=2
+        )
 
         # Re-using the existing TestResultsViewer slot as a compact chat feed.
         self.test_results = TestResultsViewer(bottom_row, width=320, height=170)
-        self.test_results.pack(side="right", fill="both", expand=False, padx=(2, 0), pady=2)
+        self.test_results.pack(
+            side="right", fill="both", expand=False, padx=(2, 0), pady=2
+        )
 
-    def _toggle_visibility(self) -> None:
-        """Toggle sandbox viewer visibility."""
-        self.is_visible = not self.is_visible
+    def _create_terminal_panels(self) -> None:
+        """Create panels for terminal mode."""
+        # Create terminal emulator covering most of the space
+        self.terminal_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        self.terminal_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        if self.is_visible:
-            self.content_frame.pack(fill="both", expand=True)
-            self.toggle_button.configure(text="▼ Hide Sandbox Viewer")
-        else:
-            self.content_frame.pack_forget()
-            self.toggle_button.configure(text="▲ Show Sandbox Viewer")
+        # Create terminal emulator
+        self.terminal_emulator = self.terminal_manager.create_terminal(
+            "main", self.terminal_frame
+        )
+        self.terminal_emulator.pack(fill="both", expand=True)
+
+        # Status panel (compact) for session info
+        status_row = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        status_row.pack(fill="x", padx=5, pady=2)
+
+        self.status_panel = StatusPanel(status_row, height=60)
+        self.status_panel.pack(fill="x", pady=2)
+
+    def detect_terminal_mode(self, command: str) -> bool:
+        """
+        Detect if a command should trigger terminal mode.
+
+        Args:
+            command: Command to analyze
+
+        Returns:
+            True if command should trigger terminal mode
+        """
+        # Check for metasploit-related commands
+        metasploit_patterns = [
+            r"\bmsfconsole\b",
+            r"\bmsfvenom\b",
+            r"\bmetasploit\b",
+            r"\bexploit\b.*\bwindows\b",
+            r"\bexploit\b.*\blinux\b",
+            r"\bexploit\b.*\bsmb\b",
+            r"\bexploit\b.*\bssh\b",
+            r"\bhandler\b",
+            r"\breverse\b.*\btcp\b",
+            r"\bmeterpreter\b",
+            r"\bsession\b.*\bopen\b",
+            r"\b\.rc\b",  # Resource scripts
+        ]
+
+        for pattern in metasploit_patterns:
+            if re.search(pattern, command, re.IGNORECASE):
+                return True
+
+        return False
+
+    def switch_to_terminal_mode(self) -> None:
+        """Switch from code view to terminal mode."""
+        if self.terminal_mode:
+            return
+
+        logger.info("Switching to terminal mode")
+        self.terminal_mode = True
+        self.metasploit_active = True
+
+        # Clear existing panels
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+
+        # Create terminal panels
+        self._create_terminal_panels()
+
+    def switch_to_code_mode(self) -> None:
+        """Switch from terminal mode to code view."""
+        if not self.terminal_mode:
+            return
+
+        logger.info("Switching to code mode")
+        self.terminal_mode = False
+        self.metasploit_active = False
+
+        # Stop terminal
+        if hasattr(self, "terminal_manager"):
+            self.terminal_manager.stop_all()
+
+        # Clear existing panels
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+
+        # Create code panels
+        self._create_code_panels()
+
+    def handle_metasploit_command(self, command: str, output_callback=None) -> None:
+        """
+        Handle a metasploit command with terminal display.
+
+        Args:
+            command: Command to execute
+            output_callback: Callback for real-time output
+        """
+        # Switch to terminal mode if not already in it
+        if not self.terminal_mode:
+            self.switch_to_terminal_mode()
+
+        # Show the command in terminal
+        if hasattr(self, "terminal_emulator"):
+            self.terminal_emulator.show_command(command)
+
+        # Set output callback if provided
+        if output_callback and hasattr(self, "terminal_emulator"):
+            self.terminal_emulator.append_output = output_callback
+
+        self.metasploit_active = True
+
+    def update_sessions(self, sessions: dict) -> None:
+        """Update active sessions display."""
+        if hasattr(self, "terminal_emulator"):
+            self.terminal_emulator.update_sessions(sessions)
+        elif hasattr(self, "status_panel"):
+            # Fallback to status panel
+            session_info = f"Sessions: {len(sessions)}"
+            self.status_panel.set_step(0, session_info)
+
+    def update_listeners(self, listeners: dict) -> None:
+        """Update active listeners display."""
+        if hasattr(self, "terminal_emulator"):
+            self.terminal_emulator.update_listeners(listeners)
+        elif hasattr(self, "status_panel"):
+            # Fallback to status panel
+            listener_info = f"Listeners: {len(listeners)}"
+            self.status_panel.set_step(0, listener_info)
 
     def handle_gui_callback(self, event_type: str, data: dict) -> None:
         """
@@ -177,6 +309,11 @@ class SandboxViewer(ctk.CTkFrame):
             "retry_attempt": self._on_retry_attempt,
             # Error events
             "error_occurred": self._on_error_occurred,
+            # Metasploit events
+            "metasploit_command": self._on_metasploit_command,
+            "metasploit_output": self._on_metasploit_output,
+            "session_created": self._on_session_created,
+            "listener_started": self._on_listener_started,
         }
 
         handler = handlers.get(event_type)
@@ -202,7 +339,9 @@ class SandboxViewer(ctk.CTkFrame):
             self.current_request_id = request_id
             from datetime import datetime
 
-            self.code_editor.set_metadata(request_id, timestamp=datetime.now().strftime("%H:%M:%S"))
+            self.code_editor.set_metadata(
+                request_id, timestamp=datetime.now().strftime("%H:%M:%S")
+            )
 
     def _on_code_chunk_generated(self, data: dict) -> None:
         """Handle code chunk generated (for streaming)."""
@@ -231,7 +370,9 @@ class SandboxViewer(ctk.CTkFrame):
                 from datetime import datetime
 
                 self.code_editor.set_metadata(
-                    request_id, timestamp=datetime.now().strftime("%H:%M:%S"), file_path=file_path
+                    request_id,
+                    timestamp=datetime.now().strftime("%H:%M:%S"),
+                    file_path=file_path,
                 )
 
             line_count = len(code.split("\n"))
@@ -349,7 +490,10 @@ class SandboxViewer(ctk.CTkFrame):
         if not line:
             return
 
-        is_error = bool(data.get("is_error")) or data.get("source") in {"stderr", "error"}
+        is_error = bool(data.get("is_error")) or data.get("source") in {
+            "stderr",
+            "error",
+        }
 
         if is_error:
             self.execution_console.log_error(line.rstrip("\n"))
@@ -442,22 +586,74 @@ class SandboxViewer(ctk.CTkFrame):
         error = data.get("error", "")
         self.execution_console.log_error(f"Error: {error}")
 
+    # Metasploit event handlers
+    def _on_metasploit_command(self, data: dict) -> None:
+        """Handle metasploit command execution."""
+        command = data.get("command", "")
+        if command:
+            self.handle_metasploit_command(command)
+
+    def _on_metasploit_output(self, data: dict) -> None:
+        """Handle metasploit output."""
+        output = data.get("output", "")
+        if output and hasattr(self, "terminal_emulator"):
+            self.terminal_emulator.append_output(output)
+
+    def _on_session_created(self, data: dict) -> None:
+        """Handle session creation."""
+        session_id = data.get("session_id", "")
+        session_info = data.get("session_info", {})
+
+        if session_id and hasattr(self, "terminal_emulator"):
+            self.terminal_emulator.show_session_created(session_id, session_info)
+
+        self.update_sessions({session_id: session_info})
+
+    def _on_listener_started(self, data: dict) -> None:
+        """Handle listener start."""
+        listener_id = data.get("listener_id", "")
+        listener_info = data.get("listener_info", {})
+
+        if listener_id and hasattr(self, "terminal_emulator"):
+            self.terminal_emulator.show_listener_started(listener_id, listener_info)
+
+        self.update_listeners({listener_id: listener_info})
+
     def clear_all(self) -> None:
         """Clear all panels."""
-        self.code_editor.clear()
-        self.execution_console.clear()
-        self.test_results.clear()
-        self.deployment_panel.show_pending()
-        self.status_panel.reset()
-        self.test_id_map.clear()
+        if self.terminal_mode and hasattr(self, "terminal_emulator"):
+            self.terminal_emulator.clear_terminal()
+        else:
+            if hasattr(self, "code_editor"):
+                self.code_editor.clear()
+            if hasattr(self, "execution_console"):
+                self.execution_console.clear()
+            if hasattr(self, "test_results"):
+                self.test_results.clear()
+            if hasattr(self, "deployment_panel"):
+                self.deployment_panel.show_pending()
+            if hasattr(self, "status_panel"):
+                self.status_panel.reset()
+            self.test_id_map.clear()
 
     def start_timer(self) -> None:
         """Start the elapsed time timer."""
-        self.status_panel.start_timer()
+        if hasattr(self, "status_panel"):
+            self.status_panel.start_timer()
 
     def update_timer(self) -> None:
         """Update elapsed time display."""
-        self.status_panel.update_timer()
+        if hasattr(self, "status_panel"):
+            self.status_panel.update_timer()
+
+    def stop(self) -> None:
+        """Stop the sandbox viewer and cleanup."""
+        if hasattr(self, "terminal_manager"):
+            self.terminal_manager.stop_all()
+
+        self.timer_running = False
+        if self.timer_thread:
+            self.timer_thread.join(timeout=1.0)
 
     def configure(self, **kwargs) -> None:
         """

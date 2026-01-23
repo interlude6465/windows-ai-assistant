@@ -9,12 +9,14 @@ import logging
 from typing import Callable, Generator, Optional
 
 from spectral.adaptive_fixing import AdaptiveFixEngine
+from spectral.autonomous_pentesting_assistant import AutonomousPentestingAssistant
 from spectral.code_step_breakdown import CodeStepBreakdown
 from spectral.direct_executor import DirectExecutor
 from spectral.execution_models import CodeStep, ExecutionMode
 from spectral.execution_monitor import ExecutionMonitor
 from spectral.execution_router import ExecutionRouter
 from spectral.llm_client import LLMClient
+from spectral.metasploit_executor import MetasploitExecutor
 from spectral.mistake_learner import MistakeLearner
 from spectral.persistent_memory import MemoryModule
 from spectral.research_intent_handler import ResearchIntentHandler
@@ -61,15 +63,43 @@ class DualExecutionOrchestrator:
         self.memory_module = memory_module
         self._gui_callback = gui_callback
         self.router = ExecutionRouter()
+
+        # Initialize components
         self.direct_executor = DirectExecutor(
             llm_client, self.mistake_learner, memory_module, gui_callback
         )
         self.code_step_breakdown = CodeStepBreakdown(llm_client)
         self.execution_monitor = ExecutionMonitor()
-        self.execution_monitor.set_gui_callback(gui_callback)
         self.adaptive_fix_engine = AdaptiveFixEngine(llm_client, self.mistake_learner)
         self.research_handler = ResearchIntentHandler()
-        logger.info("DualExecutionOrchestrator initialized")
+
+        # Initialize metasploit components
+        self.metasploit_executor = MetasploitExecutor()
+        self.exploitation_reasoner = None  # Will be initialized with LLM if available
+        self.autonomous_pentesting_assistant = AutonomousPentestingAssistant(
+            llm_client=llm_client,
+            metasploit_executor=self.metasploit_executor,
+            exploitation_reasoner=None,  # Will set below if LLM available
+            semantic_classifier=None,  # Will be set by chat session
+        )
+
+        # Initialize exploitation reasoner if we have LLM
+        if llm_client:
+            from spectral.exploitation_reasoner import ExploitationReasoner
+
+            self.exploitation_reasoner = ExploitationReasoner(llm_client)
+            self.autonomous_pentesting_assistant.exploitation_reasoner = (
+                self.exploitation_reasoner
+            )
+
+        # Set GUI callback for metasploit components
+        if gui_callback:
+            self.metasploit_executor.set_output_callback(gui_callback)
+
+        # Start monitoring for session tracking
+        self.execution_monitor.start_monitoring()
+
+        logger.info("DualExecutionOrchestrator initialized with autonomous pentesting")
 
     @property
     def gui_callback(self) -> Optional[Callable[..., None]]:
@@ -106,18 +136,30 @@ class DualExecutionOrchestrator:
         # Route to appropriate execution mode
         mode, confidence = self.router.classify(user_input)
 
+        # Handle pentesting requests with autonomous pentesting assistant
+        if self.router.is_pentesting_request(user_input):
+            logger.info(
+                "Pentesting request detected, using autonomous pentesting assistant"
+            )
+            yield from self._execute_pentesting_mode(user_input)
+            return
+
         if mode == ExecutionMode.RESEARCH:
             logger.info("Using RESEARCH mode")
             yield from self._execute_research_mode(user_input)
         elif mode == ExecutionMode.RESEARCH_AND_ACT:
             logger.info("Using RESEARCH_AND_ACT mode")
-            yield from self._execute_research_and_act_mode(user_input, max_attempts=max_attempts)
+            yield from self._execute_research_and_act_mode(
+                user_input, max_attempts=max_attempts
+            )
         elif mode == ExecutionMode.DIRECT and confidence >= 0.6:
             logger.info("Using DIRECT execution mode")
             yield from self._execute_direct_mode(user_input, max_attempts=max_attempts)
         else:
             logger.info("Using PLANNING execution mode")
-            yield from self._execute_planning_mode(user_input, max_attempts=max_attempts)
+            yield from self._execute_planning_mode(
+                user_input, max_attempts=max_attempts
+            )
 
     def _execute_direct_mode(
         self, user_input: str, max_attempts: Optional[int]
@@ -129,8 +171,12 @@ class DualExecutionOrchestrator:
         # Check if research is needed for this request
         needs_research, tool_name = self.router.should_research(user_input)
         if needs_research:
-            logger.info(f"Research needed for '{tool_name}', routing to RESEARCH_AND_ACT mode")
-            yield from self._execute_research_and_act_mode(user_input, max_attempts=max_attempts)
+            logger.info(
+                f"Research needed for '{tool_name}', routing to RESEARCH_AND_ACT mode"
+            )
+            yield from self._execute_research_and_act_mode(
+                user_input, max_attempts=max_attempts
+            )
             return
 
         try:
@@ -148,7 +194,9 @@ class DualExecutionOrchestrator:
         yield f"🔍 Researching: {user_input}...\n"
 
         try:
-            research_response, _ = self.research_handler.handle_research_query(user_input)
+            research_response, _ = self.research_handler.handle_research_query(
+                user_input
+            )
             yield f"\n{research_response}\n"
         except Exception as e:
             logger.error(f"RESEARCH mode failed: {e}")
@@ -162,7 +210,9 @@ class DualExecutionOrchestrator:
         yield f"🔍 Step 1: Researching {user_input}...\n"
 
         try:
-            research_response, pack = self.research_handler.handle_research_query(user_input)
+            research_response, pack = self.research_handler.handle_research_query(
+                user_input
+            )
             yield "   ✓ Research complete\n\n"
 
             yield "🚀 Step 2: Executing based on research findings...\n"
@@ -200,9 +250,13 @@ Save any generated files to the Desktop."""
             # Route based on complexity
             mode, confidence = self.router.classify(user_input)
             if mode == ExecutionMode.PLANNING or len(user_input.split()) > 10:
-                yield from self._execute_planning_mode(augmented_input, max_attempts=max_attempts)
+                yield from self._execute_planning_mode(
+                    augmented_input, max_attempts=max_attempts
+                )
             else:
-                yield from self._execute_direct_mode(augmented_input, max_attempts=max_attempts)
+                yield from self._execute_direct_mode(
+                    augmented_input, max_attempts=max_attempts
+                )
 
         except Exception as e:
             logger.error(f"RESEARCH_AND_ACT mode failed: {e}")
@@ -248,7 +302,9 @@ Save any generated files to the Desktop."""
 
                 # Apply Smart Input Detection & Injection
                 input_handler = SmartInputHandler()
-                step.code, test_inputs = input_handler.detect_and_inject_inputs(step.code)
+                step.code, test_inputs = input_handler.detect_and_inject_inputs(
+                    step.code
+                )
                 if test_inputs:
                     yield f"   🧠 Smart Input: Auto-injecting {len(test_inputs)} values\n"
                     step.code = input_handler.inject_test_inputs(step.code, test_inputs)
@@ -263,7 +319,11 @@ Save any generated files to the Desktop."""
                         error_output = ""
                         full_output = ""
 
-                        for line, is_error, error_msg in self.execution_monitor.execute_step(step):
+                        for (
+                            line,
+                            is_error,
+                            error_msg,
+                        ) in self.execution_monitor.execute_step(step):
                             full_output += line
                             yield f"   {line}"
                             if is_error:
@@ -310,8 +370,10 @@ Save any generated files to the Desktop."""
                             break
 
                         # Parse error
-                        error_type, error_details = self.execution_monitor.parse_error_from_output(
-                            error_output or full_output
+                        error_type, error_details = (
+                            self.execution_monitor.parse_error_from_output(
+                                error_output or full_output
+                            )
                         )
                         yield f"   Error type: {error_type}\n"
                         yield "   Diagnosing failure...\n"
@@ -346,7 +408,9 @@ Save any generated files to the Desktop."""
                             )
                             # Override fix strategy to regenerate code with stdlib only
                             diagnosis.fix_strategy = "stdlib_fallback"
-                            diagnosis.suggested_fix = "Rewrite using only Python standard library"
+                            diagnosis.suggested_fix = (
+                                "Rewrite using only Python standard library"
+                            )
 
                         yield "   Applying fix...\n"
                         fixed_code = self.adaptive_fix_engine.generate_fix(
@@ -487,7 +551,9 @@ Rules:
             raw_code = self.llm_client.generate(prompt)
             code = clean_code(str(raw_code))
             code = ensure_utf8_header(code)
-            logger.debug(f"Generated code for step {step.step_number}: {len(code)} characters")
+            logger.debug(
+                f"Generated code for step {step.step_number}: {len(code)} characters"
+            )
             return str(code)
         except Exception as e:
             logger.error(f"Failed to generate code for step {step.step_number}: {e}")
@@ -505,3 +571,27 @@ Rules:
         """
         mode, _ = self.router.classify(user_input)
         return ExecutionMode(mode)
+
+    def _execute_pentesting_mode(self, user_input: str) -> Generator[str, None, None]:
+        """Execute pentesting request using autonomous pentesting assistant."""
+        logger.info(f"Executing pentesting request: {user_input}")
+
+        try:
+            # Use the autonomous pentesting assistant
+            response = self.autonomous_pentesting_assistant.handle_request(user_input)
+
+            # Stream the response
+            yield f"🎯 {response}\n"
+
+            # If the response indicates a metasploit command was executed,
+            # trigger terminal mode in the sandbox
+            if self.metasploit_executor.detect_terminal_mode(user_input):
+                if self._gui_callback:
+                    self._gui_callback(
+                        "metasploit_command",
+                        {"command": user_input, "response": response},
+                    )
+
+        except Exception as e:
+            logger.error(f"Pentesting execution failed: {e}")
+            yield f"\n❌ Pentesting execution failed: {str(e)}\n"
