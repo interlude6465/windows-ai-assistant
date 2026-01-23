@@ -3,6 +3,8 @@ Execution router module for dual execution mode.
 
 Classifies incoming requests as DIRECT, PLANNING, RESEARCH, or RESEARCH_AND_ACT
 based on complexity and intent.
+
+Updated to support autonomous pentesting routing.
 """
 
 import logging
@@ -10,6 +12,71 @@ import re
 from typing import Optional, Tuple
 
 from spectral.execution_models import ExecutionMode
+
+# Pentesting keywords for detection
+PENTESTING_KEYWORDS = {
+    # Exploitation keywords
+    "exploit",
+    "exploitation",
+    "attack",
+    "compromise",
+    "penetration",
+    "pentest",
+    "metasploit",
+    "msfconsole",
+    "msfvenom",
+    "payload",
+    "reverse shell",
+    "bind shell",
+    "meterpreter",
+    "session",
+    "listener",
+    "handler",
+    "backdoor",
+    "backdoor",
+    # Reconnaissance keywords
+    "scan",
+    "enumerate",
+    "reconnaissance",
+    "discovery",
+    "fingerprint",
+    "nmap",
+    "port scan",
+    "service scan",
+    "vulnerability scan",
+    "footprinting",
+    # Post-exploitation keywords
+    "privilege",
+    "escalate",
+    "persistence",
+    "maintain access",
+    "lateral movement",
+    "pivot",
+    "credential",
+    "dump",
+    "mimikatz",
+    "hash",
+    "token",
+    # Security testing keywords
+    "vulnerability",
+    "cve",
+    "exploit chain",
+    "attack vector",
+    "pen testing",
+    "security assessment",
+    "red team",
+    "ethical hacking",
+    # Common attack terms
+    "rce",
+    "remote code execution",
+    "lfi",
+    "rfi",
+    "sql injection",
+    "xss",
+    "directory traversal",
+    "buffer overflow",
+    "format string",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +282,53 @@ class ExecutionRouter:
 
         return False, None
 
+    def is_pentesting_request(self, user_input: str) -> bool:
+        """
+        Check if user input is a pentesting-related request.
+
+        Args:
+            user_input: User's natural language request
+
+        Returns:
+            True if this is a pentesting request
+        """
+        input_lower = user_input.lower().strip()
+
+        # Check for pentesting keywords
+        keyword_count = sum(
+            1 for keyword in PENTESTING_KEYWORDS if keyword in input_lower
+        )
+
+        # If we find 2 or more pentesting keywords, it's likely a pentesting request
+        if keyword_count >= 2:
+            return True
+
+        # Check for explicit patterns
+        pentest_patterns = [
+            r"\bexploit\b.*\bwindows\b",
+            r"\bexploit\b.*\blinux\b",
+            r"\bmsfconsole\b",
+            r"\bmsfvenom\b",
+            r"\breverse shell\b",
+            r"\bbind shell\b",
+            r"\bpayload\b.*\bwindows\b",
+            r"\bpayload\b.*\blinux\b",
+            r"\bget shell\b",
+            r"\bport scan\b",
+            r"\bservice scan\b",
+            r"\bprivilege escalation\b",
+            r"\bpost exploitation\b",
+            r"\bmetasploit\b.*\bexploit\b",
+            r"\bscan\b.*\btarget\b",  # Added scan target pattern
+            r"\bscan\b.*\bvulnerabilities\b",  # Added scan vulnerabilities pattern
+        ]
+
+        for pattern in pentest_patterns:
+            if re.search(pattern, input_lower):
+                return True
+
+        return False
+
     def classify(self, user_input: str) -> Tuple[ExecutionMode, float]:
         """
         Classify user input into execution mode.
@@ -229,6 +343,13 @@ class ExecutionRouter:
 
         input_lower = user_input.lower().strip()
         words = input_lower.split()
+
+        # EARLY EXIT: Check for pentesting requests first
+        if self.is_pentesting_request(user_input):
+            logger.debug(
+                "Pentesting request detected, routing to autonomous pentesting"
+            )
+            return ExecutionMode.PLANNING, 0.95  # High confidence for pentesting
 
         # EARLY EXIT: Exclude self-referential questions (about Spectral itself)
         self_ref_patterns = [
@@ -282,14 +403,33 @@ class ExecutionRouter:
                 logger.debug("Short input with direct action verb")
                 return ExecutionMode.DIRECT, 0.85
 
-            strong_tech_keywords = ["error", "exception", "install", "setup", "configure", "deploy"]
-            has_strong_tech = any(keyword in input_lower for keyword in strong_tech_keywords)
+            strong_tech_keywords = [
+                "error",
+                "exception",
+                "install",
+                "setup",
+                "configure",
+                "deploy",
+            ]
+            has_strong_tech = any(
+                keyword in input_lower for keyword in strong_tech_keywords
+            )
             if not has_strong_tech:
-                logger.debug("Short input without strong technical keywords, skipping research")
+                logger.debug(
+                    "Short input without strong technical keywords, skipping research"
+                )
                 return ExecutionMode.DIRECT, 0.4
 
         # EARLY EXIT: Exclude creation commands from research
-        creation_keywords = ["write", "create", "build", "generate", "implement", "make", "develop"]
+        creation_keywords = [
+            "write",
+            "create",
+            "build",
+            "generate",
+            "implement",
+            "make",
+            "develop",
+        ]
         if any(input_lower.startswith(kw) for kw in creation_keywords):
             logger.debug(
                 "Creation command detected, routing to DIRECT/PLANNING instead of RESEARCH"
@@ -309,18 +449,29 @@ class ExecutionRouter:
                 "complete reverse shell",
             ]
             if any(phrase in input_lower for phrase in multi_step_security):
-                logger.debug("Multi-step security workflow detected in creation command")
+                logger.debug(
+                    "Multi-step security workflow detected in creation command"
+                )
                 return ExecutionMode.PLANNING, 0.8
 
             # Determine between DIRECT and PLANNING
-            direct_keyword_count = sum(1 for word in words if word in self.direct_keywords)
-            planning_keyword_count = sum(1 for word in words if word in self.planning_keywords)
+            direct_keyword_count = sum(
+                1 for word in words if word in self.direct_keywords
+            )
+            planning_keyword_count = sum(
+                1 for word in words if word in self.planning_keywords
+            )
             if planning_keyword_count > direct_keyword_count or len(words) > 10:
                 return ExecutionMode.PLANNING, 0.8
             return ExecutionMode.DIRECT, 0.8
 
         # EARLY EXIT: Exclude meta-prompts from research
-        meta_prompts = ["on purpose", "intentionally", "as an example", "for demonstration"]
+        meta_prompts = [
+            "on purpose",
+            "intentionally",
+            "as an example",
+            "for demonstration",
+        ]
         if any(pattern in input_lower for pattern in meta_prompts):
             logger.debug("Meta-prompt detected, avoiding research")
             return ExecutionMode.DIRECT, 0.7
@@ -364,7 +515,9 @@ class ExecutionRouter:
                 research_score += 1.0
 
         # Questions are usually research
-        if input_lower.startswith(("how", "what", "why", "when", "where", "can", "does", "is")):
+        if input_lower.startswith(
+            ("how", "what", "why", "when", "where", "can", "does", "is")
+        ):
             research_score += 0.6
 
         # Question marks also indicate research
@@ -372,7 +525,10 @@ class ExecutionRouter:
             research_score += 0.3
 
         # Error messages suggest research
-        if any(word in input_lower for word in ["error", "failed", "exception", "traceback"]):
+        if any(
+            word in input_lower
+            for word in ["error", "failed", "exception", "traceback"]
+        ):
             research_score += 0.6
 
         # Check for direct mode keywords
@@ -380,11 +536,15 @@ class ExecutionRouter:
         direct_score += direct_keyword_count * 0.3
 
         # Check for planning mode keywords
-        planning_keyword_count = sum(1 for word in words if word in self.planning_keywords)
+        planning_keyword_count = sum(
+            1 for word in words if word in self.planning_keywords
+        )
         planning_score += planning_keyword_count * 0.4
 
         # Check for complexity indicators (strong planning signal)
-        complexity_count = sum(1 for phrase in self.complexity_indicators if phrase in input_lower)
+        complexity_count = sum(
+            1 for phrase in self.complexity_indicators if phrase in input_lower
+        )
         planning_score += complexity_count * 0.5
 
         # Length penalty: longer requests tend to be planning mode
