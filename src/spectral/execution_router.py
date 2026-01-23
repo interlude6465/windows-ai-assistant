@@ -52,32 +52,40 @@ class ExecutionRouter:
             "implement",
             "develop",
             "search",
+            "find",
+            "list",
+            "check",
+            "scan",
+            "show",
+            "get",
+            "open",
+            "close",
         }
 
         # Planning mode keywords (complex, multi-step requests)
+        # Keep this list focused: only keywords that strongly indicate a multi-phase workflow.
         self.planning_keywords = {
-            "with",
-            "and",
             "then",
             "also",
             "including",
-            "plus",
+            "after",
+            "afterward",
             "multi",
+            "multiple",
             "step",
             "phase",
             "stage",
             "pipeline",
             "workflow",
-            "system",
+            "architecture",
             "framework",
+            "system",
             "application",
             "platform",
-            "architecture",
             "setup",
             "configure",
             "deploy",
             "integrate",
-            "connect",
             "chain",
         }
 
@@ -90,17 +98,16 @@ class ExecutionRouter:
             "authentication",
             "database",
             "api",
-            "web",
             "server",
             "client",
             "frontend",
             "backend",
+            "web scraper",
             "scraper",
             "parser",
             "processor",
             "manager",
             "controller",
-            "service",
         }
 
         # Research keywords (information gathering)
@@ -230,9 +237,14 @@ class ExecutionRouter:
             logger.debug("Greeting detected, skipping research")
             return ExecutionMode.DIRECT, 0.3
 
-        # EARLY EXIT: Very short inputs (< 4 words) unlikely to be research queries
-        # unless they contain strong technical keywords
+        # EARLY EXIT: Very short inputs (< 4 words) are unlikely to be research queries.
+        # If the user leads with a clear action verb ("run", "list", "check", ...),
+        # keep confidence high so the orchestrator actually executes the request.
         if len(words) < 4:
+            if words and words[0] in self.direct_keywords:
+                logger.debug("Short input with direct action verb")
+                return ExecutionMode.DIRECT, 0.85
+
             strong_tech_keywords = ["error", "exception", "install", "setup", "configure", "deploy"]
             has_strong_tech = any(keyword in input_lower for keyword in strong_tech_keywords)
             if not has_strong_tech:
@@ -257,6 +269,13 @@ class ExecutionRouter:
         if any(pattern in input_lower for pattern in meta_prompts):
             logger.debug("Meta-prompt detected, avoiding research")
             return ExecutionMode.DIRECT, 0.7
+
+        # FAST PATH: keep simple, single-step actions in DIRECT mode.
+        # This prevents over-routing to PLANNING for requests like "list files" or
+        # "check port 22".
+        if self._is_simple_direct_request(user_input):
+            logger.debug("Simple direct request detected")
+            return ExecutionMode.DIRECT, 0.85
 
         # Count indicators for each mode
         direct_score = 0.0
@@ -344,6 +363,87 @@ class ExecutionRouter:
         )
 
         return mode, confidence
+
+    def _is_simple_direct_request(self, user_input: str) -> bool:
+        """Return True if this looks like a single, straightforward action.
+
+        This is intentionally conservative: it only triggers when we see a clear
+        action verb (run/list/check/search/etc.) and do *not* see multi-step or
+        architectural/planning cues.
+        """
+
+        input_lower = user_input.lower().strip()
+        words = re.findall(r"[a-z0-9]+", input_lower)
+        if not words:
+            return False
+
+        if self._is_complex_request(input_lower, words):
+            return False
+
+        # Imperative verb at the start
+        if words[0] in self.direct_keywords:
+            return True
+
+        # Polite request form: "can you <verb> ...", "please <verb> ..."
+        polite_prefixes = [
+            "can you ",
+            "could you ",
+            "would you ",
+            "will you ",
+            "please ",
+            "pls ",
+        ]
+        if any(input_lower.startswith(prefix) for prefix in polite_prefixes):
+            # Look for an action verb in the first few tokens after the prefix
+            return any(word in self.direct_keywords for word in words[0:8])
+
+        # Common action-questions that should still be treated as execution requests
+        # (e.g. "what ports are open...")
+        if input_lower.startswith(("what ports", "what services")):
+            return True
+
+        return False
+
+    def _is_complex_request(self, input_lower: str, words: list[str]) -> bool:
+        """Heuristic complexity check.
+
+        "Complex" here means multi-step workflows, architectural planning, or
+        conditionals that likely require structured reasoning.
+        """
+
+        # Avoid treating "check if ..." as multi-step conditional logic.
+        if input_lower.startswith(("check if ", "see if ", "verify if ")):
+            conditional_markers = [" then ", " else ", " otherwise "]
+            return any(marker in input_lower for marker in conditional_markers)
+
+        # Explicit multi-step markers
+        multi_step_phrases = [
+            "and then",
+            "after that",
+            "then ",
+            "next ",
+            "also ",
+        ]
+        if any(phrase in input_lower for phrase in multi_step_phrases):
+            return True
+
+        # Planning keywords / architectural cues
+        if any(word in self.planning_keywords for word in words):
+            return True
+
+        # Complexity indicator phrases
+        if any(phrase in input_lower for phrase in self.complexity_indicators):
+            return True
+
+        # Long prompts tend to be multi-part
+        if len(words) > 12:
+            return True
+
+        # True conditionals ("if ... then ...")
+        if " if " in f" {input_lower} " and " then " in f" {input_lower} ":
+            return True
+
+        return False
 
     def is_direct_mode(self, user_input: str) -> bool:
         """

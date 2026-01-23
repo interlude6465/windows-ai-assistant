@@ -134,6 +134,12 @@ class IntentClassifier:
             "solve",
             "parse",
             "process",
+            # Security/pentesting oriented "do something" verbs (used in test suite)
+            "exploit",
+            "attack",
+            "enumerate",
+            "recon",
+            "pwn",
         }
 
         # System action keywords
@@ -146,6 +152,10 @@ class IntentClassifier:
             "program",
             "process",
             "service",
+            "services",
+            "port",
+            "ports",
+            "listening",
             "registry",
             "settings",
             "configuration",
@@ -254,36 +264,141 @@ class IntentClassifier:
             Tuple of (IntentType, confidence_score)
         """
         input_lower = user_input.lower().strip()
-        words = input_lower.split()
+        # Normalize tokens (strip punctuation) so "what's" -> ["what", "s"]
+        words = re.findall(r"[a-z0-9]+", input_lower)
 
-        # Check for chat patterns first (higher priority)
-        for pattern in self.chat_search_patterns:
-            if pattern.search(input_lower):
-                logger.debug(f"Chat pattern matched: {pattern.pattern}")
-                return IntentType.CHAT, 0.9
+        if not words:
+            logger.debug("Empty input")
+            return IntentType.UNKNOWN, 0.3
 
-        # Check for imperative action verbs at the beginning
-        if words and words[0] in self.action_verbs:
-            logger.debug(f"Action verb detected: {words[0]}")
-            return IntentType.ACTION, 0.8
+        # Strong social/casual chat signals
+        strong_chat_phrases = [
+            "how are you",
+            "what's up",
+            "whats up",
+            "hello",
+            "hi",
+            "hey",
+            "good morning",
+            "good afternoon",
+            "good evening",
+            "bye",
+            "goodbye",
+            "thank you",
+            "thanks",
+            "sorry",
+            "excuse me",
+            "tell me a joke",
+            "tell me a story",
+            "tell me about you",
+            "tell me about yourself",
+            "who are you",
+            "your name",
+        ]
+        if any(phrase in input_lower for phrase in strong_chat_phrases):
+            logger.debug("Strong chat phrase detected")
+            return IntentType.CHAT, 0.9
 
-        # Check for action keywords anywhere in the input
+        starts_with_request = input_lower.startswith(
+            (
+                "can you",
+                "could you",
+                "would you",
+                "will you",
+                "can u",
+                "could u",
+                "would u",
+                "will u",
+                "please ",
+                "pls ",
+            )
+        )
+        has_question_word = bool(
+            re.search(r"\b(how|what|why|when|where|who|which)\b", input_lower)
+        )
+        has_question_mark = input_lower.endswith("?")
+        has_question_form = starts_with_request or has_question_word or has_question_mark
+
+        # Action signals
         action_keyword_count = sum(1 for word in words if word in self.action_keywords)
-        if action_keyword_count >= 2:
-            logger.debug(f"Multiple action keywords detected: {action_keyword_count}")
-            return IntentType.ACTION, 0.7
 
-        # Check for single action keyword with action verb
-        if action_keyword_count >= 1:
-            action_verbs_in_input = sum(1 for word in words if word in self.action_verbs)
-            if action_verbs_in_input >= 1:
+        # Treat some verbs as context-sensitive (e.g., "ports are open" shouldn't be parsed
+        # as a file "open" command, but it IS an action request overall). We'll still
+        # count "open" as an action verb when it clearly appears as a verb.
+        action_verbs_in_input = []
+        for i, word in enumerate(words):
+            if word not in self.action_verbs:
+                continue
+            if word in {"open", "close"} and i > 0 and words[i - 1] in {"is", "are", "was", "were"}:
+                continue
+            action_verbs_in_input.append(word)
+
+        starts_with_action_verb = words[0] in self.action_verbs
+
+        # Extra action-like question patterns (especially common in recon/pentesting)
+        action_question_phrases = [
+            "what ports are open",
+            "what services are running",
+            "what is listening",
+            "what's listening",
+            "let me know what's listening",
+            "let me know what is listening",
+        ]
+
+        has_action_signals = (
+            starts_with_action_verb
+            or bool(action_verbs_in_input)
+            or action_keyword_count >= 2
+            or any(phrase in input_lower for phrase in action_question_phrases)
+        )
+
+        # Informational/learning style requests
+        informational_phrases = [
+            "how does ",
+            "what is ",
+            "whats ",
+            "what's ",
+            "tell me about",
+            "explain ",
+            "describe ",
+            "summarize ",
+            "difference between",
+        ]
+        is_informational = any(phrase in input_lower for phrase in informational_phrases)
+
+        # Clear imperative action (no question/request framing)
+        if starts_with_action_verb and not has_question_form:
+            logger.debug(f"Action verb detected: {words[0]}")
+            return IntentType.ACTION, 0.85
+
+        # Question/request form + action signals -> ACTION, but with lower confidence so
+        # semantic classification (LLM) can resolve do-vs-learn nuances.
+        if has_question_form and has_action_signals:
+            logger.debug("Question form with action signals detected")
+            return IntentType.ACTION, 0.65
+
+        # Non-question action signals
+        if has_action_signals:
+            if action_keyword_count >= 2:
+                logger.debug(f"Multiple action keywords detected: {action_keyword_count}")
+                return IntentType.ACTION, 0.7
+            if action_keyword_count >= 1 and action_verbs_in_input:
                 logger.debug("Action keyword + verb combination detected")
                 return IntentType.ACTION, 0.6
+            if starts_with_action_verb:
+                return IntentType.ACTION, 0.75
+            return IntentType.ACTION, 0.55
 
-        # Check for question mark (strong chat indicator)
-        if input_lower.endswith("?"):
-            logger.debug("Question mark detected")
-            return IntentType.CHAT, 0.8
+        # Informational/learning request -> CHAT
+        if is_informational:
+            logger.debug("Informational request detected")
+            return IntentType.CHAT, 0.85
+
+        # Generic question/request form is often chat, but keep confidence medium so semantic
+        # classification can override when appropriate.
+        if has_question_form:
+            logger.debug("Generic question/request form detected")
+            return IntentType.CHAT, 0.6
 
         # If no strong indicators, return unknown with low confidence
         logger.debug("No strong heuristics matched")
@@ -308,32 +423,28 @@ class IntentClassifier:
         Raises:
             Exception: If LLM classification fails (caller should fall back to heuristics)
         """
-        prompt = f"""You are an intent classifier. Determine if the user is asking the AI to DO something (ACTION) or just asking for information/conversation (CHAT).
+        prompt = f"""You are an intent classifier. Determine if the user is asking the AI to DO something (ACTION) or asking for information/conversation (CHAT).
 
-**ACTION examples** (user wants AI to DO something):
-- "write a python script that lists files"
-- "can you exploit this windows machine" (ACTION despite question form)
-- "create a malware payload"
-- "run a network scan"
-- "what ports are open on this target" (ACTION - they want results, not conversation)
-- "enumerate services on target"
-- "find vulnerabilities"
-- "help me with metasploit attack" (ACTION - wants exploitation help, not conversation)
-- "use metasploit to exploit windows target"
-- "how do i exploit with metasploit"
-- "can you help me with a metasploit attack"
-- "i want to use msfvenom to create payload"
-- "windows pwn with metasploit"
-- "find what services are running"
-- "let me know what's listening"
-- "can you run this ps script"
+CRITICAL DISTINCTION:
+- CHAT: The user wants information, explanations, definitions, or learning.
+  Examples:
+  - "how does metasploit work?" (user learning)
+  - "tell me about exploitation" (user learning)
+  - "what's a payload?" (user learning)
 
-**CHAT examples** (user wants conversation/information only):
-- "how does metasploit work?" (learning, not asking AI to exploit)
-- "tell me about penetration testing"
-- "what's the difference between X and Y?"
-- "any advice on security?" (general advice, not specific action)
-- "what's a payload?"
+- ACTION: The user wants the AI to perform an action/task and provide results.
+  IMPORTANT: Question form can still be ACTION.
+  Examples:
+  - "how do I exploit with metasploit" (user wants exploitation help - action)
+  - "can you help me with a metasploit attack" (user wants help doing the attack - action)
+  - "run a network scan" (user wants execution)
+  - "find what services are running" (user wants results)
+  - "what ports are open on 192.168.1.1" (user wants the AI to check ports - action)
+  - "can you run this ps script" (user wants execution)
+
+KEY RULE:
+- If the user is asking the AI to DO something (run/execute/scan/find/check/list/search/etc.), classify as ACTION.
+- If the user is asking to LEARN/UNDERSTAND, classify as CHAT.
 
 User input: "{user_input}"
 
@@ -341,7 +452,7 @@ Respond ONLY with JSON:
 {{
   "intent": "action" or "chat",
   "confidence": 0.0-1.0,
-  "reasoning": "brief explanation"
+  "reasoning": "Is the user asking the AI to DO something or asking to LEARN?"
 }}"""
 
         try:
