@@ -54,23 +54,9 @@ class SimpleTaskExecutor:
         if any(re.search(pattern, user_lower) for pattern in self.simple_program_patterns):
             return True
 
-        # Exclude code-generation/development tasks
-        complex_keywords = [
-            "write",
-            "create",
-            "generate",
-            "build",
-            "program",
-            "app",
-            "application",
-            "script",
-            "code",
-            "develop",
-            "implement",
-        ]
-
-        if any(keyword in user_lower for keyword in complex_keywords):
-            return False
+        # NOTE: We NO LONGER exclude code-generation keywords here since those should
+        # be routed to DualExecutionOrchestrator via the chat layer.
+        # SimpleTaskExecutor now focuses on immediate system query tasks only.
 
         # IP / network configuration queries
         if self._matches_pattern(user_input, self.ip_address_patterns):

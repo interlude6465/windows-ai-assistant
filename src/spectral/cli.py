@@ -192,8 +192,45 @@ def main(argv: Optional[list] = None) -> int:
 
         # Handle normal command execution
         if args.command and not args.chat:
+            # Try to route to dual execution orchestrator for action/code requests
+            try:
+                from spectral.semantic_intent_classifier import SemanticIntent, SemanticIntentClassifier
+                
+                classifier = SemanticIntentClassifier()
+                intent, confidence = classifier.classify(args.command)
+                
+                # Check if this should use dual execution
+                should_use_dual_exec = (
+                    (intent == SemanticIntent.CODE and confidence >= 0.3) or
+                    (intent == SemanticIntent.ACTION and confidence >= 0.4 and 
+                     any(keyword in args.command.lower() for keyword in 
+                         ['generate', 'create', 'write', 'build', 'make', 'script', 'code', 'program', 
+                          'file', 'scan', 'search', 'list', 'check', 'get', 'run']))
+                )
+                
+                if should_use_dual_exec:
+                    logger.info(f"Using dual execution orchestrator (intent: {intent}, confidence: {confidence:.2f})")
+                    dual_exec = container.get_dual_execution_orchestrator(config_path=args.config)
+                    
+                    # Execute and print output
+                    for chunk in dual_exec.process_request(args.command, max_attempts=5):
+                        print(chunk, end='', flush=True)
+                    print()  # Final newline
+                    return 0
+            except Exception as e:
+                logger.warning(f"Failed to use dual execution orchestrator: {e}")
+                # Fall through to standard orchestrator
+            
+            # Fallback to standard orchestrator
             result = orchestrator.handle_command(args.command)
             logger.info(f"Result: {result['message']}")
+            
+            # Print the result data if available
+            if result.get('data'):
+                print(result['data'])
+            elif result.get('message'):
+                print(result['message'])
+            
             return 0
 
         # If no command was provided, print help unless chat was requested.

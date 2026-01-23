@@ -123,7 +123,23 @@ class ChatSession:
         self._cancel_event = threading.Event()
 
         # Initialize intent classifier and response generator if not provided
-        self.intent_classifier = intent_classifier or IntentClassifier()
+        if intent_classifier:
+            self.intent_classifier = intent_classifier
+        else:
+            # Get LLM client from response generator or create one
+            llm_client_for_intent = None
+            if response_generator and hasattr(response_generator, 'llm_client'):
+                llm_client_for_intent = response_generator.llm_client
+            elif config:
+                try:
+                    llm_client_for_intent = LLMClient(config.llm)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to initialize LLM client for intent classification: %s",
+                        e,
+                    )
+
+            self.intent_classifier = IntentClassifier(llm_client=llm_client_for_intent)
 
         # Initialize conversation memory for context-aware responses
         if response_generator and hasattr(response_generator, "conversation_memory"):
@@ -887,6 +903,42 @@ class ChatSession:
 
             return response
 
+        # Try dual execution orchestrator for action/code intents
+        if self.dual_execution_orchestrator:
+            # Use semantic intent classifier
+            semantic_intent, confidence = self.semantic_classifier.classify(user_input)
+            
+            # Check if this should use dual execution
+            should_use_dual_exec = (
+                (semantic_intent == SemanticIntent.CODE and confidence >= 0.3) or
+                (semantic_intent == SemanticIntent.ACTION and confidence >= 0.4 and 
+                 any(keyword in user_input.lower() for keyword in 
+                     ['generate', 'create', 'write', 'build', 'make', 'script', 'code', 'program', 
+                      'file', 'scan', 'search', 'list', 'check', 'get', 'run']))
+            )
+            
+            if should_use_dual_exec:
+                logger.debug(f"Using dual execution orchestrator for non-streaming (intent: {semantic_intent}, confidence: {confidence:.2f})")
+                try:
+                    # Collect all output from generator
+                    output_parts = []
+                    for chunk in self.dual_execution_orchestrator.process_request(user_input, max_attempts=5):
+                        output_parts.append(chunk)
+                    
+                    response = "".join(output_parts)
+                    
+                    # Add to history
+                    context = self.get_context_summary()
+                    self.add_message("user", user_input, metadata={"context": context, "intent": semantic_intent.value})
+                    self.add_message(
+                        "assistant", response, metadata={"execution_mode": "dual_execution", "intent": semantic_intent.value}
+                    )
+                    
+                    return response
+                except Exception as e:
+                    logger.exception(f"Error using dual execution orchestrator: {e}")
+                    logger.info("Falling back to standard processing")
+
         # Add user message to history
         context = self.get_context_summary()
         self.add_message("user", user_input, metadata={"context": context, "intent": intent})
@@ -1259,26 +1311,16 @@ class ChatSession:
         try:
             # First, check if this is a code execution request for dual execution orchestrator
             if self.dual_execution_orchestrator:
-                # Check if user input matches code execution patterns
-                code_keywords = [
-                    "write",
-                    "code",
-                    "program",
-                    "script",
-                    "run",
-                    "execute",
-                    "create",
-                    "generate",
-                    "build",
-                    "make",
-                    "implement",
-                    "develop",
-                ]
-                input_lower = user_input.lower()
-                has_code_keyword = any(keyword in input_lower for keyword in code_keywords)
+                # Use semantic intent classifier instead of rigid keywords
+                intent, confidence = self.semantic_classifier.classify(user_input)
 
-                if has_code_keyword:
-                    logger.debug("Using dual execution orchestrator for code execution")
+                # Check for code intent with reasonable confidence (lowered threshold to 0.3 for better catch rate)
+                should_use_dual_exec = (
+                    intent == SemanticIntent.CODE and confidence >= 0.3
+                )
+                
+                if should_use_dual_exec:
+                    logger.debug(f"Using dual execution orchestrator for execution (intent: {intent}, confidence: {confidence:.2f})")
                     try:
                         for chunk in self.dual_execution_orchestrator.process_request(
                             user_input, max_attempts=max_attempts
@@ -1292,7 +1334,7 @@ class ChatSession:
                         self.add_message(
                             "assistant",
                             full_response,
-                            metadata={"execution_mode": "dual_execution"},
+                            metadata={"execution_mode": "dual_execution", "intent": intent.value},
                         )
                         return
                     except Exception as e:

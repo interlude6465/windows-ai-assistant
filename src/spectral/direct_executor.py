@@ -1110,9 +1110,16 @@ class DirectExecutor:
             prompt += "Make sure to use this filename in any internal references or save logic."
 
         try:
-            code = self.llm_client.generate(prompt)
-            # Clean markdown formatting from generated code
-            cleaned_code = clean_code(str(code))
+            # STREAMING GENERATION: Emit chunks as they arrive
+            code_chunks = []
+            for chunk in self.llm_client.generate_stream(prompt):
+                code_chunks.append(chunk)
+                # Emit chunk event for sandbox viewer to display in real-time
+                self._emit_gui_event("code_chunk_generated", {"chunk": chunk})
+
+            # Combine all chunks and clean
+            full_code = ''.join(code_chunks)
+            cleaned_code = clean_code(str(full_code))
 
             # Handle desktop save request
             if save_to_desktop:
@@ -1120,7 +1127,7 @@ class DirectExecutor:
 
             logger.debug(f"Generated {len(cleaned_code)} characters of {language} code")
 
-            # Emit code generated event to sandbox viewer
+            # Emit final code generated event to sandbox viewer
             self._emit_gui_event("code_generated", {"code": cleaned_code})
             self._emit_gui_event("code_generation_complete", {})
 
