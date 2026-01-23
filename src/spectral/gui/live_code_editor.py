@@ -118,7 +118,7 @@ class LiveCodeEditor(ctk.CTkFrame):
         # Use standard tk.Text instead of CTkTextbox to support tags for syntax highlighting
         self.code_text = tk.Text(
             self.text_frame,
-            font=("Consolas", 12),
+            font=("Consolas", 14),
             foreground=self.DEFAULT_COLOR,
             background="#1E1E1E",
             insertbackground="white",

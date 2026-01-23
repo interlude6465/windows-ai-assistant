@@ -85,19 +85,28 @@ class SemanticIntentClassifier:
 
         prompt = f"""Classify the following user request into one of these intents:
 
-**CODE**: Code generation, programming, scripting, creating software, writing functions/classes
-- Examples: "make python keylogger", "write a script", "create function", "build program"
+**CODE**: Code generation, programming, scripting, creating software,
+writing functions/classes
+- Examples: "make python keylogger", "write a script", "create function",
+"build program"
 
-**EXPLOITATION**: Penetration testing, exploiting vulnerabilities, gaining access, attacks, metasploit
-- Examples: "remote access windows with metasploit", "get shell on target", "exploit SSH", "RCE attack"
+**EXPLOITATION**: Penetration testing, exploiting vulnerabilities,
+gaining access, attacks, metasploit
+- Examples: "remote access windows with metasploit", "get shell on target",
+"exploit SSH", "RCE attack"
 
-**RECONNAISSANCE**: Scanning, enumeration, discovering services/ports, target analysis
-- Examples: "find open ports", "scan for services", "enumerate target", "what services are running"
+**RECONNAISSANCE**: Scanning, enumeration, discovering services/ports,
+target analysis
+- Examples: "find open ports", "scan for services", "enumerate target",
+"what services are running"
 
-**RESEARCH**: Information gathering, vulnerability lookup, CVE research, technical questions
-- Examples: "what vulnerabilities in Apache 2.4.41", "research CVE-2021-41773", "explain EternalBlue"
+**RESEARCH**: Information gathering, vulnerability lookup, CVE research,
+technical questions
+- Examples: "what vulnerabilities in Apache 2.4.41",
+"research CVE-2021-41773", "explain EternalBlue"
 
-**CHAT**: Casual conversation, greetings, general questions, unrelated to technical tasks
+**CHAT**: Casual conversation, greetings, general questions,
+unrelated to technical tasks
 - Examples: "hello", "how are you", "what's the weather", "tell me a joke"
 
 **User Request:**
@@ -120,7 +129,45 @@ Reason: [brief explanation]"""
         Returns:
             Tuple of (SemanticIntent, confidence_score)
         """
-        lines = response.strip().split("\n")
+        import json
+        import re
+
+        logger.debug(f"Raw classification response: {response}")
+
+        # Clean markdown code blocks if present
+        cleaned_response = response.strip()
+        if cleaned_response.startswith("```"):
+            lines = cleaned_response.split("\n")
+            # Remove lines that start with ```
+            cleaned_lines = [line for line in lines if not line.strip().startswith("```")]
+            cleaned_response = "\n".join(cleaned_lines).strip()
+
+        # Try to parse as JSON first
+        try:
+            # Try to extract JSON from the response if it's wrapped in text
+            json_match = re.search(r"\{[^{}]*\}", cleaned_response, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group(0))
+
+                # Extract intent
+                intent_str = data.get("intent", data.get("Intent", "chat")).lower()
+                intent = SemanticIntent.CHAT
+                for intent_enum in SemanticIntent:
+                    if intent_enum.value.lower() == intent_str.lower():
+                        intent = intent_enum
+                        break
+
+                # Extract confidence
+                confidence = float(data.get("confidence", data.get("Confidence", 0.5)))
+                confidence = max(0.0, min(1.0, confidence))
+
+                logger.info(f"Classified as {intent.value} with confidence {confidence:.2f}")
+                return intent, confidence
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            logger.debug(f"Failed to parse as JSON: {e}")
+
+        # Fall back to line-by-line parsing
+        lines = cleaned_response.split("\n")
 
         intent = SemanticIntent.CHAT
         confidence = 0.5
@@ -150,6 +197,28 @@ Reason: [brief explanation]"""
                     confidence = max(0.0, min(1.0, confidence))
                 except (ValueError, IndexError):
                     logger.debug(f"Failed to parse confidence from line: {line}")
+
+        # If we still have default confidence, try keyword matching as last resort
+        if confidence == 0.5:
+            response_lower = cleaned_response.lower()
+            code_keywords = ["code", "script", "program", "write", "create"]
+            if any(keyword in response_lower for keyword in code_keywords):
+                intent = SemanticIntent.CODE
+                confidence = 0.7
+            elif any(
+                keyword in response_lower
+                for keyword in ["exploit", "metasploit", "attack", "compromise"]
+            ):
+                intent = SemanticIntent.EXPLOITATION
+                confidence = 0.7
+            elif any(
+                keyword in response_lower for keyword in ["scan", "enumerate", "reconnaissance"]
+            ):
+                intent = SemanticIntent.RECONNAISSANCE
+                confidence = 0.7
+            elif any(keyword in response_lower for keyword in ["research", "vulnerability", "cve"]):
+                intent = SemanticIntent.RESEARCH
+                confidence = 0.7
 
         logger.info(f"Classified as {intent.value} with confidence {confidence:.2f}")
         return intent, confidence
@@ -257,10 +326,13 @@ Reason: [brief explanation]"""
             return SemanticIntent.CHAT, 0.3
 
         # Get intent with highest score
-        intent = max(scores, key=scores.get)
+        intent = max(scores, key=lambda k: scores[k])
         confidence = min(0.7, 0.4 + max_score * 0.1)
 
-        logger.info(f"Fallback classification: {intent.value} (score: {max_score}, confidence: {confidence:.2f})")
+        logger.info(
+            f"Fallback classification: {intent.value} "
+            f"(score: {max_score}, confidence: {confidence:.2f})"
+        )
 
         return intent, confidence
 
@@ -320,7 +392,8 @@ Reason: [brief explanation]"""
 
         if any(pattern in input_lower for pattern in ambiguous_patterns):
             return (
-                f"I think you want to {intent.value} something, but I'm not sure what you're referring to. "
+                f"I think you want to {intent.value} something, but I'm not "
+                f"sure what you're referring to. "
                 f"Could you provide more specific details? For example:\n"
                 f"- What target are you working with?\n"
                 f"- What service or system are you referring to?\n"
@@ -329,7 +402,9 @@ Reason: [brief explanation]"""
 
         return "Could you please clarify what you'd like me to do?"
 
-    def classify_with_clarification(self, user_input: str) -> Tuple[SemanticIntent, float, Optional[str]]:
+    def classify_with_clarification(
+        self, user_input: str
+    ) -> Tuple[SemanticIntent, float, Optional[str]]:
         """
         Classify intent and optionally return a clarification question.
 

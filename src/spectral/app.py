@@ -86,9 +86,12 @@ class GUIApp(customtkinter.CTk):
             memory_module=memory_module,
         )
 
+        # One GUI callback for sandbox viewer updates (execution + chat feed)
+        self._sandbox_gui_callback = self.get_gui_callback()
+
         # Connect GUI callback to dual execution orchestrator for sandbox streaming
         if self.dual_execution_orchestrator:
-            self.dual_execution_orchestrator.gui_callback = self.get_gui_callback()
+            self.dual_execution_orchestrator.gui_callback = self._sandbox_gui_callback
 
         # GUI state
         self._processing = False
@@ -113,10 +116,17 @@ class GUIApp(customtkinter.CTk):
         logger.info("GUI application initialized")
 
     def _setup_ui(self) -> None:
-        """Set up the user interface layout."""
-        # Main container - split into chat area (top) and sandbox viewer (bottom)
-        self.main_frame = customtkinter.CTkFrame(self)
-        self.main_frame.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        """Set up the user interface layout with tabbed interface."""
+        # Create tabbed interface - Chat and Sandbox tabs
+        self.tab_view = customtkinter.CTkTabview(self, width=900, height=800)
+        self.tab_view.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+        # Add tabs
+        self.chat_tab = self.tab_view.add("Chat")
+        self.sandbox_tab = self.tab_view.add("Sandbox")
+
+        # Set Chat as default tab
+        self.tab_view.set("Chat")
 
         # Sidebar
         sidebar_frame = customtkinter.CTkFrame(self, width=250, corner_radius=10)
@@ -160,15 +170,10 @@ class GUIApp(customtkinter.CTk):
         self.actions_text.pack(pady=5, padx=5, fill="both", expand=True)
         self.actions_text.configure(state="disabled")
 
-        # Chat area
-        chat_title = customtkinter.CTkLabel(
-            self.main_frame, text="Chat", font=("Arial", 14, "bold")
-        )
-        chat_title.pack(pady=5)
-
+        # ========== CHAT TAB CONTENT ==========
         # Use standard tk.Text instead of CTkTextbox to support tags for coloring
         self.chat_text = tk.Text(
-            self.main_frame,
+            self.chat_tab,
             background=self._get_dark_bg_color(),
             foreground="white",
             insertbackground="white",
@@ -176,13 +181,13 @@ class GUIApp(customtkinter.CTk):
             wrap="word",
             state="disabled",
         )
-        self.chat_text.pack(fill="both", expand=True, pady=5)
+        self.chat_text.pack(fill="both", expand=True, pady=5, padx=5)
         # Configure tag for user messages (blue color)
         self.chat_text.tag_configure("user_message", foreground="#1E90FF")
 
         # Plan/Execution status
-        status_frame = customtkinter.CTkFrame(self.main_frame)
-        status_frame.pack(pady=5, fill="x")
+        status_frame = customtkinter.CTkFrame(self.chat_tab)
+        status_frame.pack(pady=5, fill="x", padx=5)
 
         self.plan_status = customtkinter.CTkLabel(
             status_frame, text="Plan: Idle", font=("Arial", 10), text_color="gray"
@@ -194,19 +199,9 @@ class GUIApp(customtkinter.CTk):
         )
         self.exec_status.pack(side="left", padx=5)
 
-        # Sandbox viewer toggle button
-        self.sandbox_toggle_button = customtkinter.CTkButton(
-            status_frame,
-            text="📊 Show Sandbox Viewer",
-            command=self._toggle_sandbox_viewer,
-            width=150,
-            font=("Arial", 10),
-        )
-        self.sandbox_toggle_button.pack(side="right", padx=5)
-
         # Input area
-        input_frame = customtkinter.CTkFrame(self.main_frame)
-        input_frame.pack(pady=5, fill="x")
+        input_frame = customtkinter.CTkFrame(self.chat_tab)
+        input_frame.pack(pady=5, fill="x", padx=5)
 
         self.input_text = customtkinter.CTkEntry(
             input_frame, placeholder_text="Enter command or speak 'Spectral...'"
@@ -229,24 +224,10 @@ class GUIApp(customtkinter.CTk):
         )
         self.cancel_button.pack(side="left", padx=5)
 
-        # Sandbox viewer (initially hidden)
-        self.sandbox_frame = customtkinter.CTkFrame(
-            self.main_frame, fg_color=("#1E1E1E", "#111111")
-        )
-        self.sandbox_frame.pack(fill="both", expand=True, padx=5, pady=(5, 0))
-        self.sandbox_frame.pack_forget()  # Initially hidden
-
-        self.sandbox_viewer = SandboxViewer(self.sandbox_frame, debug_mode=self.sandbox_debug_mode)
-        self.sandbox_viewer.pack(fill="both", expand=True)
-
-    def _toggle_sandbox_viewer(self) -> None:
-        """Toggle sandbox viewer visibility."""
-        if self.sandbox_frame.winfo_viewable():
-            self.sandbox_frame.pack_forget()
-            self.sandbox_toggle_button.configure(text="📊 Show Sandbox Viewer")
-        else:
-            self.sandbox_frame.pack(fill="both", expand=True, padx=5, pady=(5, 0))
-            self.sandbox_toggle_button.configure(text="📊 Hide Sandbox Viewer")
+        # ========== SANDBOX TAB CONTENT ==========
+        # Full sandbox viewer in its own tab
+        self.sandbox_viewer = SandboxViewer(self.sandbox_tab, debug_mode=self.sandbox_debug_mode)
+        self.sandbox_viewer.pack(fill="both", expand=True, padx=5, pady=5)
 
     def _run_on_ui_thread(self, func: Callable[[], None]) -> None:
         if threading.current_thread() is threading.main_thread():
@@ -290,6 +271,20 @@ class GUIApp(customtkinter.CTk):
 
         return callback
 
+    def _emit_chat_feed_clear(self) -> None:
+        try:
+            self._sandbox_gui_callback("chat_feed_clear", {})
+        except Exception:
+            pass
+
+    def _emit_chat_feed_append(self, text: str, role: str) -> None:
+        if not text:
+            return
+        try:
+            self._sandbox_gui_callback("chat_feed_append", {"text": text, "role": role})
+        except Exception:
+            pass
+
     def _send_command(self) -> None:
         """Send the input command for processing."""
         if self._processing:
@@ -321,11 +316,15 @@ class GUIApp(customtkinter.CTk):
 
         # Display user message in chat BEFORE processing
         def show_user_message():
+            self._emit_chat_feed_clear()
+
             self.chat_text.configure(state="normal")
             self.chat_text.insert("end", f"[User] {command}\n", "user_message")
             self.chat_text.insert("end", "\n")
             self.chat_text.see("end")
             self.chat_text.configure(state="disabled")
+
+            self._emit_chat_feed_append(f"[User] {command}\n\n", role="user")
 
         self._run_on_ui_thread(show_user_message)
         self._processing = True
@@ -357,6 +356,8 @@ class GUIApp(customtkinter.CTk):
                 self.chat_text.see("end")
                 self.chat_text.configure(state="disabled")
 
+                self._emit_chat_feed_append("AI: ", role="assistant")
+
             self._run_on_ui_thread(_add_ai_prefix)
 
             cancelled = False
@@ -382,6 +383,8 @@ class GUIApp(customtkinter.CTk):
                     self.chat_text.see("end")
                     self.chat_text.configure(state="disabled")
 
+                    self._emit_chat_feed_append("\n[Cancelled]", role="system")
+
                 self._run_on_ui_thread(_append_cancelled)
 
             # Add newlines after response to separate conversation turns
@@ -390,6 +393,8 @@ class GUIApp(customtkinter.CTk):
                 self.chat_text.insert("end", "\n\n")
                 self.chat_text.see("end")
                 self.chat_text.configure(state="disabled")
+
+                self._emit_chat_feed_append("\n\n", role="system")
 
             self._run_on_ui_thread(_add_separator)
 
@@ -405,7 +410,7 @@ class GUIApp(customtkinter.CTk):
             error_msg = f"Error: {str(e)}"
 
             def _append_error(msg: str = error_msg) -> None:
-                self._append_chat_message(msg)
+                self._append_chat_message(msg, role="error")
 
             self._run_on_ui_thread(_append_error)
             logger.exception("Error processing command")
@@ -426,18 +431,16 @@ class GUIApp(customtkinter.CTk):
 
             self._run_on_ui_thread(reset_controls)
 
-    def _append_chat_message(self, text: str, is_streaming: bool = False) -> None:
-        """
-        Append text to the chat display.
-
-        Args:
-            text: Text to append
-            is_streaming: Whether this is streaming output
-        """
+    def _append_chat_message(
+        self, text: str, is_streaming: bool = False, role: str = "assistant"
+    ) -> None:
+        """Append text to the chat display."""
         self.chat_text.configure(state="normal")
         self.chat_text.insert("end", text)
         self.chat_text.see("end")
         self.chat_text.configure(state="disabled")
+
+        self._emit_chat_feed_append(text, role=role)
 
     def _toggle_voice(self) -> None:
         """Toggle voice input mode."""

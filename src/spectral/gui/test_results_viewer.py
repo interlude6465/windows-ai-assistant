@@ -1,8 +1,17 @@
-"""
-Test results viewer panel for showing test execution progress and results.
+"""Test results viewer panel.
+
+Historically this panel displayed structured automated test results.
+
+For the sandbox UI it now primarily acts as a compact live chat/transcript feed
+so users can watch the conversation while generated code executes.
+
+The original test-related methods are still supported so existing event routing
+won't break; test events are rendered as simple log lines and summarized.
 """
 
 import logging
+import tkinter as tk
+from datetime import datetime
 from typing import Dict
 
 import customtkinter as ctk
@@ -11,240 +20,150 @@ logger = logging.getLogger(__name__)
 
 
 class TestResultsViewer(ctk.CTkFrame):
-    """
-    Shows test execution progress and results.
+    """Compact transcript feed (and optional test event log)."""
 
-    Features:
-    - Shows each test with inputs and expected output
-    - Real-time status updates (RUNNING → PASSED/FAILED)
-    - Shows actual output for debugging
-    - Progress indicator (1/3 passed)
-    """
-
-    # Status colors
-    PENDING_COLOR = "gray"
-    RUNNING_COLOR = "yellow"
-    PASSED_COLOR = "green"
-    FAILED_COLOR = "red"
-
-    # Status icons
-    STATUS_ICONS = {
-        "pending": "⏳",
-        "running": "▶️",
-        "passed": "✅",
-        "failed": "❌",
-    }
+    USER_COLOR = "#1E90FF"
+    ASSISTANT_COLOR = "#F8F8F2"
+    SYSTEM_COLOR = "#8BE9FD"
+    ERROR_COLOR = "#FF5555"
+    TEST_COLOR = "#F1FA8C"
 
     def __init__(self, parent_frame, **kwargs):
-        """
-        Initialize test results viewer.
-
-        Args:
-            parent_frame: Parent frame to pack into
-            **kwargs: Additional frame arguments
-        """
         super().__init__(parent_frame, **kwargs)
 
         self.configure(fg_color=("#2B2B2B", "#1E1E1E"))
-        self.test_data = {}  # test_id -> test info
-        self.test_counter = 0
+
+        # Simple in-memory stats so DeploymentPanel can still show something.
+        self._test_stats = {"total": 0, "passed": 0, "failed": 0}
+        self._test_counter = 0
 
         # Title
-        self.title_label = ctk.CTkLabel(self, text="🧪 TEST RESULTS", font=("Arial", 12, "bold"))
+        self.title_label = ctk.CTkLabel(self, text="💬 CHAT FEED", font=("Arial", 12, "bold"))
         self.title_label.pack(pady=(5, 0), padx=10, anchor="w")
 
-        # Summary label
+        # Subtitle
         self.summary_label = ctk.CTkLabel(
-            self, text="0/0 PASSED (0%)", font=("Arial", 10), text_color="gray"
+            self,
+            text="Live transcript (8px)",
+            font=("Arial", 9),
+            text_color="gray",
         )
         self.summary_label.pack(pady=(0, 5), padx=10, anchor="w")
 
-        # Scrollable frame for test results
-        self.scrollable_frame = ctk.CTkScrollableFrame(
-            self,
-            label_text="",
-            fg_color=("#1E1E1E", "#111111"),
+        # Scrollable text area
+        self.text_frame = ctk.CTkFrame(self, fg_color=("#1E1E1E", "#111111"))
+        self.text_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        self.scrollbar = ctk.CTkScrollbar(self.text_frame)
+        self.scrollbar.pack(side="right", fill="y")
+
+        self.feed_text = tk.Text(
+            self.text_frame,
+            font=("Consolas", 8),
+            foreground=self.ASSISTANT_COLOR,
+            background="#1E1E1E",
+            insertbackground="white",
+            borderwidth=0,
+            highlightthickness=0,
+            wrap="word",
         )
-        self.scrollable_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        self.feed_text.pack(side="left", fill="both", expand=True)
+        self.feed_text.configure(yscrollcommand=self.scrollbar.set)
+        self.scrollbar.configure(command=self.feed_text.yview)
 
-        logger.info("TestResultsViewer initialized")
+        self._configure_tags()
 
+        logger.info("TestResultsViewer (chat feed) initialized")
+
+    def _configure_tags(self) -> None:
+        self.feed_text.tag_configure("user", foreground=self.USER_COLOR)
+        self.feed_text.tag_configure("assistant", foreground=self.ASSISTANT_COLOR)
+        self.feed_text.tag_configure("system", foreground=self.SYSTEM_COLOR)
+        self.feed_text.tag_configure("error", foreground=self.ERROR_COLOR)
+        self.feed_text.tag_configure("test", foreground=self.TEST_COLOR)
+        self.feed_text.tag_configure("timestamp", foreground="#6272A4")
+
+    def _append(self, text: str, tag: str = "assistant", with_timestamp: bool = False) -> None:
+        if not text:
+            return
+
+        if with_timestamp:
+            ts = datetime.now().strftime("%H:%M:%S")
+            self.feed_text.insert("end", f"[{ts}] ", "timestamp")
+
+        self.feed_text.insert("end", text, tag)
+        self.feed_text.see("end")
+
+        # Keep the widget from growing unbounded.
+        max_chars = 200_000
+        current_len = int(self.feed_text.index("end-1c").split(".")[0])
+        if current_len > 5000:
+            # Drop oldest lines.
+            self.feed_text.delete("1.0", "200.0")
+
+        if int(self.feed_text.count("1.0", "end", "chars")[0]) > max_chars:
+            self.feed_text.delete("1.0", "1000.0")
+
+    # ------------------------------
+    # Chat feed API
+    # ------------------------------
+    def append_chat_text(self, text: str, role: str = "assistant") -> None:
+        tag = {
+            "user": "user",
+            "assistant": "assistant",
+            "system": "system",
+            "error": "error",
+        }.get(role, "assistant")
+        self._append(text, tag=tag)
+
+    def clear_feed(self) -> None:
+        self.feed_text.delete("1.0", "end")
+
+    # ------------------------------
+    # Backwards compatible test API
+    # ------------------------------
     def add_test(self, name: str, inputs: list, expected: str) -> str:
-        """
-        Add a test to the viewer.
+        self._test_counter += 1
+        self._test_stats["total"] += 1
 
-        Args:
-            name: Test name
-            inputs: List of input values
-            expected: Expected output description
-
-        Returns:
-            test_id for updating later
-        """
-        self.test_counter += 1
-        test_id = f"test_{self.test_counter}"
-
-        # Create frame for this test
-        test_frame = ctk.CTkFrame(self.scrollable_frame, fg_color=("#2B2B2B", "#1E1E1E"))
-        test_frame.pack(fill="x", pady=3, padx=3)
-
-        # Store test info
-        self.test_data[test_id] = {
-            "name": name,
-            "inputs": inputs,
-            "expected": expected,
-            "frame": test_frame,
-            "status": "pending",
-        }
-
-        # Header row
-        header_frame = ctk.CTkFrame(test_frame, fg_color="transparent")
-        header_frame.pack(fill="x", padx=5, pady=5)
-
-        # Status icon
-        status_label = ctk.CTkLabel(
-            header_frame, text=self.STATUS_ICONS["pending"], font=("Arial", 12)
+        test_id = f"test_{self._test_counter}"
+        self._append(
+            f"\n[Test {self._test_counter}] {name}\n  inputs={inputs}  expected={expected}\n",
+            tag="test",
+            with_timestamp=True,
         )
-        status_label.pack(side="left")
-        self.test_data[test_id]["status_label"] = status_label
-
-        # Test name
-        name_label = ctk.CTkLabel(
-            header_frame, text=f"Test {self.test_counter}: {name}", font=("Arial", 11, "bold")
-        )
-        name_label.pack(side="left", padx=5)
-
-        # Inputs label
-        inputs_label = ctk.CTkLabel(
-            test_frame, text=f"Inputs: {inputs}", font=("Arial", 10), text_color="gray"
-        )
-        inputs_label.pack(anchor="w", padx=10)
-
-        # Expected label
-        expected_label = ctk.CTkLabel(
-            test_frame, text=f"Expected: {expected}", font=("Arial", 10), text_color="gray"
-        )
-        expected_label.pack(anchor="w", padx=10)
-
-        # Update summary
-        self._update_summary()
-
         return test_id
 
     def update_test_running(self, test_id: str) -> None:
-        """
-        Mark test as running.
-
-        Args:
-            test_id: Test identifier
-        """
-        if test_id not in self.test_data:
-            return
-
-        self.test_data[test_id]["status"] = "running"
-        self.test_data[test_id]["status_label"].configure(text=self.STATUS_ICONS["running"])
+        self._append(f"{test_id}: RUNNING\n", tag="test")
 
     def update_test_passed(self, test_id: str, output: str, elapsed: float) -> None:
-        """
-        Mark test as passed.
-
-        Args:
-            test_id: Test identifier
-            output: Actual output from test
-            elapsed: Time taken in seconds
-        """
-        if test_id not in self.test_data:
-            return
-
-        test_info = self.test_data[test_id]
-        test_info["status"] = "passed"
-        test_info["status_label"].configure(text=self.STATUS_ICONS["passed"])
-        test_info["status_label"].configure(text_color=self.PASSED_COLOR)
-
-        # Add output label
-        output_label = ctk.CTkLabel(
-            test_info["frame"],
-            text=f"Output ({elapsed:.2f}s): {output[:100]}",
-            font=("Arial", 10),
-            text_color=self.PASSED_COLOR,
-        )
-        output_label.pack(anchor="w", padx=10, pady=(0, 5))
-
-        self._update_summary()
+        self._test_stats["passed"] += 1
+        self._append(f"{test_id}: PASSED ({elapsed:.2f}s) output={output}\n", tag="test")
 
     def update_test_failed(self, test_id: str, error: str) -> None:
-        """
-        Mark test as failed.
-
-        Args:
-            test_id: Test identifier
-            error: Error description
-        """
-        if test_id not in self.test_data:
-            return
-
-        test_info = self.test_data[test_id]
-        test_info["status"] = "failed"
-        test_info["status_label"].configure(text=self.STATUS_ICONS["failed"])
-        test_info["status_label"].configure(text_color=self.FAILED_COLOR)
-
-        # Add error label
-        error_label = ctk.CTkLabel(
-            test_info["frame"],
-            text=f"Error: {error[:100]}",
-            font=("Arial", 10),
-            text_color=self.FAILED_COLOR,
-        )
-        error_label.pack(anchor="w", padx=10, pady=(0, 5))
-
-        self._update_summary()
-
-    def _update_summary(self) -> None:
-        """Update summary label."""
-        total = len(self.test_data)
-        passed = sum(1 for t in self.test_data.values() if t["status"] == "passed")
-
-        if total > 0:
-            rate = (passed / total) * 100
-            self.summary_label.configure(
-                text=f"{passed}/{total} PASSED ({rate:.0f}%)",
-                text_color=self.PASSED_COLOR if passed == total else "gray",
-            )
-        else:
-            self.summary_label.configure(text="0/0 PASSED (0%)")
+        self._test_stats["failed"] += 1
+        self._append(f"{test_id}: FAILED error={error}\n", tag="error")
 
     def get_summary(self) -> Dict:
-        """
-        Get test summary.
-
-        Returns:
-            Summary dictionary with total, passed, failed, pass_rate
-        """
-        total = len(self.test_data)
-        passed = sum(1 for t in self.test_data.values() if t["status"] == "passed")
-        failed = sum(1 for t in self.test_data.values() if t["status"] == "failed")
+        total = self._test_stats["total"]
+        passed = self._test_stats["passed"]
+        failed = self._test_stats["failed"]
 
         return {
             "total": total,
             "passed": passed,
             "failed": failed,
-            "pass_rate": (passed / total * 100) if total > 0 else 0,
+            "pass_rate": (passed / total * 100) if total else 0,
         }
 
+    def reset_tests(self) -> None:
+        self._test_stats = {"total": 0, "passed": 0, "failed": 0}
+        self._test_counter = 0
+
     def clear(self) -> None:
-        """Clear all test results."""
-        for test_id in list(self.test_data.keys()):
-            test_info = self.test_data[test_id]
-            test_info["frame"].destroy()
-        self.test_data.clear()
-        self.test_counter = 0
-        self._update_summary()
+        self.clear_feed()
+        self.reset_tests()
 
-    def configure(self, **kwargs) -> None:
-        """
-        Configure the frame.
-
-        Args:
-            **kwargs: Configuration options
-        """
+    def configure(self, **kwargs) -> None:  # type: ignore[override]
         super().configure(**kwargs)

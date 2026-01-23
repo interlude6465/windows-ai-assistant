@@ -101,7 +101,8 @@ class CodeSaver:
                         "generations": [],
                     },
                     indent=2,
-                )
+                ),
+                encoding="utf-8",
             )
 
     def _get_date_dir(self) -> Path:
@@ -245,7 +246,9 @@ class CodeSaver:
 
             # Write to generated.py (latest state)
             try:
-                context.code_file.write_text(context.accumulated_code)
+                context.code_file.write_text(
+                    context.accumulated_code, encoding="utf-8", errors="replace"
+                )
             except Exception as e:
                 logger.error(f"Failed to write code file: {e}")
 
@@ -285,7 +288,7 @@ class CodeSaver:
             context.accumulated_code = final_code
 
             # Write final code
-            context.code_file.write_text(final_code)
+            context.code_file.write_text(final_code, encoding="utf-8", errors="replace")
 
             # Write metadata
             self._write_metadata(context, status, error_message, sandbox_result, duration)
@@ -296,7 +299,7 @@ class CodeSaver:
                 final_dir.mkdir(exist_ok=True)
 
                 final_code_file = final_dir / "generated.py"
-                final_code_file.write_text(final_code)
+                final_code_file.write_text(final_code, encoding="utf-8", errors="replace")
 
                 final_metadata_file = final_dir / "metadata.json"
                 final_metadata_file.write_text(
@@ -313,7 +316,9 @@ class CodeSaver:
                             "duration_seconds": duration,
                         },
                         indent=2,
-                    )
+                    ),
+                    encoding="utf-8",
+                    errors="replace",
                 )
 
                 context.final_dir = final_dir
@@ -370,7 +375,9 @@ class CodeSaver:
         metadata["file_path"] = str(context.code_file)
 
         try:
-            context.metadata_file.write_text(json.dumps(metadata, indent=2))
+            context.metadata_file.write_text(
+                json.dumps(metadata, indent=2), encoding="utf-8", errors="replace"
+            )
         except Exception as e:
             logger.error(f"Failed to write metadata: {e}")
 
@@ -394,7 +401,7 @@ class CodeSaver:
         """
         try:
             # Read existing manifest
-            manifest_data = json.loads(self.manifest_path.read_text())
+            manifest_data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
 
             # Create record
             record = {
@@ -419,7 +426,9 @@ class CodeSaver:
             manifest_data["last_updated"] = datetime.now(timezone.utc).isoformat()
 
             # Write back
-            self.manifest_path.write_text(json.dumps(manifest_data, indent=2))
+            self.manifest_path.write_text(
+                json.dumps(manifest_data, indent=2), encoding="utf-8", errors="replace"
+            )
 
         except Exception as e:
             logger.error(f"Failed to update manifest: {e}")
@@ -432,7 +441,7 @@ class CodeSaver:
             List of GenerationRecord objects
         """
         try:
-            manifest_data = json.loads(self.manifest_path.read_text())
+            manifest_data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
             records = []
 
             for gen_data in manifest_data.get("generations", []):
