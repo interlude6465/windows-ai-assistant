@@ -128,7 +128,7 @@ class ChatSession:
         else:
             # Get LLM client from response generator or create one
             llm_client_for_intent = None
-            if response_generator and hasattr(response_generator, 'llm_client'):
+            if response_generator and hasattr(response_generator, "llm_client"):
                 llm_client_for_intent = response_generator.llm_client
             elif config:
                 try:
@@ -713,7 +713,8 @@ class ChatSession:
         logger.info("Penetration test request detected - using intelligent methodology")
 
         # Use PentestingAssistant (methodology enforced, no shortcuts)
-        response = self.pentesting_assistant.handle_pentest_request(user_input)
+        response_result = self.pentesting_assistant.handle_pentest_request(user_input)
+        response = str(response_result)
 
         # Add to history
         context = self.get_context_summary()
@@ -868,12 +869,18 @@ class ChatSession:
         if self._is_penetration_test_request(user_input):
             return self._handle_intelligent_penetration_test(user_input)
 
-        # Check intent first - handle casual conversation immediately
-        intent = self.intent_classifier.classify_intent(user_input)
-        logger.debug(f"Classified intent as: {intent}")
+        # Check intent using SEMANTIC classifier for better accuracy
+        semantic_intent, semantic_confidence = self.semantic_classifier.classify(user_input)
+        logger.info(
+            f"Classified as {semantic_intent.value} with confidence {semantic_confidence:.2f}"
+        )
+
+        # Map semantic intent to legacy intent type for compatibility
+        intent = "casual" if semantic_intent == SemanticIntent.CHAT else "command"
+        logger.debug(f"Mapped to legacy intent: {intent}")
 
         # If this is casual conversation, generate response directly without execution
-        if intent == "casual":
+        if semantic_intent == SemanticIntent.CHAT and semantic_confidence > 0.6:
             logger.debug("Casual conversation detected, using direct response generation")
 
             # Build context from memory for casual responses (used internally, not displayed)
@@ -907,33 +914,66 @@ class ChatSession:
         if self.dual_execution_orchestrator:
             # Use semantic intent classifier
             semantic_intent, confidence = self.semantic_classifier.classify(user_input)
-            
+
             # Check if this should use dual execution
             should_use_dual_exec = (
-                (semantic_intent == SemanticIntent.CODE and confidence >= 0.3) or
-                (semantic_intent == SemanticIntent.ACTION and confidence >= 0.4 and 
-                 any(keyword in user_input.lower() for keyword in 
-                     ['generate', 'create', 'write', 'build', 'make', 'script', 'code', 'program', 
-                      'file', 'scan', 'search', 'list', 'check', 'get', 'run']))
+                semantic_intent == SemanticIntent.CODE and confidence >= 0.3
+            ) or (
+                semantic_intent == SemanticIntent.ACTION
+                and confidence >= 0.4
+                and any(
+                    keyword in user_input.lower()
+                    for keyword in [
+                        "generate",
+                        "create",
+                        "write",
+                        "build",
+                        "make",
+                        "script",
+                        "code",
+                        "program",
+                        "file",
+                        "scan",
+                        "search",
+                        "list",
+                        "check",
+                        "get",
+                        "run",
+                    ]
+                )
             )
-            
+
             if should_use_dual_exec:
-                logger.debug(f"Using dual execution orchestrator for non-streaming (intent: {semantic_intent}, confidence: {confidence:.2f})")
+                logger.debug(
+                    f"Using dual execution orchestrator for non-streaming "
+                    f"(intent: {semantic_intent}, confidence: {confidence:.2f})"
+                )
                 try:
                     # Collect all output from generator
                     output_parts = []
-                    for chunk in self.dual_execution_orchestrator.process_request(user_input, max_attempts=5):
+                    for chunk in self.dual_execution_orchestrator.process_request(
+                        user_input, max_attempts=5
+                    ):
                         output_parts.append(chunk)
-                    
+
                     response = "".join(output_parts)
-                    
+
                     # Add to history
                     context = self.get_context_summary()
-                    self.add_message("user", user_input, metadata={"context": context, "intent": semantic_intent.value})
                     self.add_message(
-                        "assistant", response, metadata={"execution_mode": "dual_execution", "intent": semantic_intent.value}
+                        "user",
+                        user_input,
+                        metadata={"context": context, "intent": semantic_intent.value},
                     )
-                    
+                    self.add_message(
+                        "assistant",
+                        response,
+                        metadata={
+                            "execution_mode": "dual_execution",
+                            "intent": semantic_intent.value,
+                        },
+                    )
+
                     return response
                 except Exception as e:
                     logger.exception(f"Error using dual execution orchestrator: {e}")
@@ -1237,12 +1277,18 @@ class ChatSession:
                 error_msg = f"Research failed: {str(e)}\n\nFalling back to regular processing..."
                 yield error_msg
 
-        # Check intent for casual conversation
-        intent = self.intent_classifier.classify_intent(user_input)
-        logger.debug(f"Classified intent as: {intent}")
+        # Check intent using SEMANTIC classifier for better accuracy
+        semantic_intent, semantic_confidence = self.semantic_classifier.classify(user_input)
+        logger.info(
+            f"Classified as {semantic_intent.value} with confidence {semantic_confidence:.2f}"
+        )
+
+        # Map semantic intent to legacy intent type for compatibility
+        intent = "casual" if semantic_intent == SemanticIntent.CHAT else "command"
+        logger.debug(f"Mapped to legacy intent: {intent}")
 
         # If this is casual conversation, generate response directly without execution
-        if intent == "casual":
+        if semantic_intent == SemanticIntent.CHAT and semantic_confidence > 0.6:
             logger.debug("Casual conversation detected, using direct response generation")
             # Build context from memory for casual responses (used internally, not displayed)
             memory_context = self._build_context_from_memory(user_input)
@@ -1314,13 +1360,15 @@ class ChatSession:
                 # Use semantic intent classifier instead of rigid keywords
                 intent, confidence = self.semantic_classifier.classify(user_input)
 
-                # Check for code intent with reasonable confidence (lowered threshold to 0.3 for better catch rate)
-                should_use_dual_exec = (
-                    intent == SemanticIntent.CODE and confidence >= 0.3
-                )
-                
+                # Check for code intent with reasonable confidence
+                # (lowered threshold to 0.3 for better catch rate)
+                should_use_dual_exec = intent == SemanticIntent.CODE and confidence >= 0.3
+
                 if should_use_dual_exec:
-                    logger.debug(f"Using dual execution orchestrator for execution (intent: {intent}, confidence: {confidence:.2f})")
+                    logger.debug(
+                        f"Using dual execution orchestrator for execution "
+                        f"(intent: {intent}, confidence: {confidence:.2f})"
+                    )
                     try:
                         for chunk in self.dual_execution_orchestrator.process_request(
                             user_input, max_attempts=max_attempts
