@@ -65,7 +65,10 @@ class ResponseGenerator:
             self._add_to_history("assistant", response)
             return response
         else:  # command
-            return self._generate_command_response(original_input, execution_result, memory_context)
+            # Join the generator for backward compatibility with generate_response()
+            return "".join(
+                self._generate_command_response(original_input, execution_result, memory_context)
+            )
 
     def generate_response_stream(
         self,
@@ -95,10 +98,10 @@ class ResponseGenerator:
             self._add_to_history("user", original_input)
             self._add_to_history("assistant", full_response)
         else:  # command
-            response = self._generate_command_response(
+            # Yield from the command response generator to stream chunks
+            yield from self._generate_command_response(
                 original_input, execution_result, memory_context
             )
-            yield response
 
     def _add_to_history(self, role: str, content: str) -> None:
         """
@@ -392,9 +395,9 @@ class ResponseGenerator:
 
     def _generate_command_response(
         self, original_input: str, execution_result: str, memory_context: Optional[str] = None
-    ) -> str:
+    ) -> Generator[str, None, None]:
         """
-        Generate a summary response for commands.
+        Generate a summary response for commands with streaming support.
 
         For simple task results (direct output), uses LLM to present naturally.
         For complex task results (plans, executions), uses summary templates.
@@ -404,8 +407,8 @@ class ResponseGenerator:
             execution_result: Result from execution
             memory_context: Optional memory context from previous conversations
 
-        Returns:
-            Summary response
+        Yields:
+            Response text chunks
         """
         logger.debug(f"Generating command response for: {original_input}")
 
@@ -414,7 +417,7 @@ class ResponseGenerator:
         is_simple_result = self._is_simple_task_result(execution_result)
 
         if is_simple_result and self.llm_client:
-            # Use LLM to present simple task results naturally
+            # Use LLM to present simple task results naturally with streaming
             prompt = f"""The user asked: "{original_input}"
 
 You executed this and got:
@@ -428,11 +431,13 @@ Just present the result directly in a friendly way.
 input() calls. All values must be hard-coded. No input() calls allowed."""
 
             try:
-                response = self.llm_client.generate(prompt)
-                return str(response).strip()
+                for chunk in self.llm_client.generate_stream(prompt):
+                    yield chunk
+                return
             except Exception as e:
-                logger.warning(f"Failed to generate response: {e}")
-                return execution_result
+                logger.warning(f"Failed to generate streaming response: {e}")
+                yield execution_result
+                return
 
         # For complex task results, use the existing summary logic
         # Parse execution result for status
@@ -440,18 +445,22 @@ input() calls. All values must be hard-coded. No input() calls allowed."""
 
         # All success
         if successful_steps == total_steps and total_steps > 0:
-            return self._build_success_summary(original_input, execution_result)
+            yield self._build_success_summary(original_input, execution_result)
+            return
         # Partial success
         elif successful_steps > 0 and successful_steps < total_steps:
-            return self._build_partial_success_summary(
+            yield self._build_partial_success_summary(
                 original_input, execution_result, successful_steps, total_steps
             )
+            return
         # All failed
         elif successful_steps == 0 and total_steps > 0:
-            return self._build_failure_summary(original_input, execution_result)
+            yield self._build_failure_summary(original_input, execution_result)
+            return
         # Unknown status (fallback)
         else:
-            return self._build_neutral_summary(original_input, execution_result)
+            yield self._build_neutral_summary(original_input, execution_result)
+            return
 
     def _is_simple_task_result(self, execution_result: str) -> bool:
         """

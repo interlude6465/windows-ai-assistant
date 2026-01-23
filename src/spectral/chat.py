@@ -189,9 +189,7 @@ class ChatSession:
             else None
         )
 
-        self.semantic_classifier = SemanticIntentClassifier(
-            llm_client=llm_client_for_classifiers
-        )
+        self.semantic_classifier = SemanticIntentClassifier(llm_client=llm_client_for_classifiers)
 
         # Initialize execution router for pentesting detection
         self.execution_router = ExecutionRouter()
@@ -239,11 +237,7 @@ class ChatSession:
         Returns:
             Context summary string
         """
-        recent = (
-            self.history[-max_messages:]
-            if len(self.history) > max_messages
-            else self.history
-        )
+        recent = self.history[-max_messages:] if len(self.history) > max_messages else self.history
 
         if not recent:
             return "No prior context."
@@ -306,9 +300,7 @@ class ChatSession:
             for exec_mem in relevant_executions:
                 context_parts.append(f"- {exec_mem.description}")
                 if exec_mem.file_locations:
-                    context_parts.append(
-                        f"  Files: {', '.join(exec_mem.file_locations)}"
-                    )
+                    context_parts.append(f"  Files: {', '.join(exec_mem.file_locations)}")
 
         return "\n".join(context_parts)
 
@@ -509,9 +501,9 @@ class ChatSession:
             True if this is a penetration testing request
         """
         # First check with execution router (more comprehensive)
-        if hasattr(
-            self, "execution_router"
-        ) and self.execution_router.is_pentesting_request(user_input):
+        if hasattr(self, "execution_router") and self.execution_router.is_pentesting_request(
+            user_input
+        ):
             logger.debug("Pentesting request detected by execution router")
             return True
 
@@ -520,9 +512,7 @@ class ChatSession:
 
         # Check for exploitation or reconnaissance intents
         if intent in [SemanticIntent.EXPLOITATION, SemanticIntent.RECONNAISSANCE]:
-            logger.info(
-                f"Detected {intent.value} intent (confidence: {confidence:.2f})"
-            )
+            logger.info(f"Detected {intent.value} intent (confidence: {confidence:.2f})")
             return True
 
         return False
@@ -538,9 +528,7 @@ class ChatSession:
         Returns:
             Response from specialized Metasploit handler with actual command execution
         """
-        logger.info(
-            "Metasploit request detected, using specialized handler with execution"
-        )
+        logger.info("Metasploit request detected, using specialized handler with execution")
 
         # Add Metasploit knowledge context to response
         try:
@@ -556,9 +544,7 @@ class ChatSession:
                 ai_response = self.llm_client.chat(messages)
 
                 # Now execute actual Metasploit commands via executor
-                executor_response = self._execute_metasploit_commands(
-                    user_input, ai_response
-                )
+                executor_response = self._execute_metasploit_commands(user_input, ai_response)
 
                 # Add to history
                 context = self.get_context_summary()
@@ -679,9 +665,7 @@ class ChatSession:
                 ai_response = llm_client.chat(messages)
 
                 # Now execute actual Metasploit commands via executor
-                executor_response = self._execute_metasploit_commands(
-                    user_input, ai_response
-                )
+                executor_response = self._execute_metasploit_commands(user_input, ai_response)
 
                 # Add to history
                 context = self.get_context_summary()
@@ -780,9 +764,7 @@ class ChatSession:
 
         return response
 
-    def _stream_intelligent_penetration_test(
-        self, user_input: str
-    ) -> Generator[str, None, None]:
+    def _stream_intelligent_penetration_test(self, user_input: str) -> Generator[str, None, None]:
         """
         Stream penetration testing request handling with intelligent conversation.
 
@@ -792,9 +774,7 @@ class ChatSession:
         Yields:
             Response chunks as they arrive
         """
-        logger.info(
-            "Penetration test request detected in stream - using intelligent methodology"
-        )
+        logger.info("Penetration test request detected in stream - using intelligent methodology")
 
         # Use PentestingAssistant (methodology enforced, no shortcuts)
         response = self.pentesting_assistant.handle_pentest_request(user_input)
@@ -828,16 +808,16 @@ class ChatSession:
 
     def _generate_conversational_response(
         self, user_input: str, execution_result: Optional[Dict[str, Any]]
-    ) -> str:
+    ) -> Generator[str, None, None]:
         """
-        Generate a conversational response based on intent and execution result.
+        Generate a conversational response based on intent and execution result with streaming.
 
         Args:
             user_input: Original user input
             execution_result: Optional execution result dictionary
 
-        Returns:
-            Conversational response string
+        Yields:
+            Response text chunks
         """
         try:
             # Classify intent
@@ -861,16 +841,16 @@ class ChatSession:
                 # Build context from memory for general responses
                 memory_context = self._build_context_from_memory(user_input)
 
-            # Generate appropriate response with memory context
-            response = self.response_generator.generate_response(
+            # Generate appropriate response with memory context using streaming
+            for chunk in self.response_generator.generate_response_stream(
                 intent, result_str, user_input, memory_context
-            )
-            return str(response)
+            ):
+                yield chunk
 
         except Exception as e:
             logger.warning(f"Failed to generate conversational response: {e}")
             # Fallback response
-            return "Is there anything else I can help you with?"
+            yield "Is there anything else I can help you with?"
 
     def format_response(
         self,
@@ -920,9 +900,7 @@ class ChatSession:
             return self._handle_intelligent_penetration_test(user_input)
 
         # Check intent using SEMANTIC classifier for better accuracy
-        semantic_intent, semantic_confidence = self.semantic_classifier.classify(
-            user_input
-        )
+        semantic_intent, semantic_confidence = self.semantic_classifier.classify(user_input)
         logger.info(
             f"Classified as {semantic_intent.value} with confidence {semantic_confidence:.2f}"
         )
@@ -933,9 +911,7 @@ class ChatSession:
 
         # If this is casual conversation, generate response directly without execution
         if semantic_intent == SemanticIntent.CHAT and semantic_confidence > 0.6:
-            logger.debug(
-                "Casual conversation detected, using direct response generation"
-            )
+            logger.debug("Casual conversation detected, using direct response generation")
 
             # Build context from memory for casual responses (used internally, not displayed)
             memory_context = self._build_context_from_memory(user_input)
@@ -950,9 +926,7 @@ class ChatSession:
 
             # Add to history
             context = self.get_context_summary()
-            self.add_message(
-                "user", user_input, metadata={"context": context, "intent": intent}
-            )
+            self.add_message("user", user_input, metadata={"context": context, "intent": intent})
             self.add_message(
                 "assistant",
                 response,
@@ -1039,9 +1013,7 @@ class ChatSession:
 
         # Add user message to history
         context = self.get_context_summary()
-        self.add_message(
-            "user", user_input, metadata={"context": context, "intent": intent}
-        )
+        self.add_message("user", user_input, metadata={"context": context, "intent": intent})
 
         try:
             # Generate plan if reasoning module is available
@@ -1220,8 +1192,7 @@ class ChatSession:
         ]
 
         is_simple_program = any(
-            re.search(pattern, user_input, re.IGNORECASE)
-            for pattern in simple_program_patterns
+            re.search(pattern, user_input, re.IGNORECASE) for pattern in simple_program_patterns
         )
 
         if is_simple_program and self.dual_execution_orchestrator:
@@ -1275,9 +1246,7 @@ class ChatSession:
                         "unless the user asked for a summary."
                     )
 
-                    for chunk in self.response_generator.llm_client.generate_stream(
-                        prompt
-                    ):
+                    for chunk in self.response_generator.llm_client.generate_stream(prompt):
                         if self.is_cancel_requested():
                             return
                         full_response += chunk
@@ -1309,22 +1278,15 @@ class ChatSession:
 
         # Check for research intent
         mode, confidence = self.execution_router.classify(user_input)
-        logger.debug(
-            f"Execution mode classified as: {mode} with confidence {confidence:.2f}"
-        )
+        logger.debug(f"Execution mode classified as: {mode} with confidence {confidence:.2f}")
 
         # Handle research intents
-        if (
-            mode in [ExecutionMode.RESEARCH, ExecutionMode.RESEARCH_AND_ACT]
-            and confidence >= 0.6
-        ):
+        if mode in [ExecutionMode.RESEARCH, ExecutionMode.RESEARCH_AND_ACT] and confidence >= 0.6:
             logger.info(f"Research intent detected: {mode}")
             yield f"\n🔍 Researching: {user_input}\n\n"
 
             try:
-                research_response, pack = self.research_handler.handle_research_query(
-                    user_input
-                )
+                research_response, pack = self.research_handler.handle_research_query(user_input)
 
                 # Add to history
                 context = self.get_context_summary()
@@ -1358,9 +1320,7 @@ class ChatSession:
                 yield error_msg
 
         # Check intent using SEMANTIC classifier for better accuracy
-        semantic_intent, semantic_confidence = self.semantic_classifier.classify(
-            user_input
-        )
+        semantic_intent, semantic_confidence = self.semantic_classifier.classify(user_input)
         logger.info(
             f"Classified as {semantic_intent.value} with confidence {semantic_confidence:.2f}"
         )
@@ -1371,9 +1331,7 @@ class ChatSession:
 
         # If this is casual conversation, generate response directly without execution
         if semantic_intent == SemanticIntent.CHAT and semantic_confidence > 0.6:
-            logger.debug(
-                "Casual conversation detected, using direct response generation"
-            )
+            logger.debug("Casual conversation detected, using direct response generation")
             # Build context from memory for casual responses (used internally, not displayed)
             memory_context = self._build_context_from_memory(user_input)
 
@@ -1392,9 +1350,7 @@ class ChatSession:
 
             # Add to history
             context = self.get_context_summary()
-            self.add_message(
-                "user", user_input, metadata={"context": context, "intent": intent}
-            )
+            self.add_message("user", user_input, metadata={"context": context, "intent": intent})
             self.add_message(
                 "assistant",
                 full_response,
@@ -1426,9 +1382,7 @@ class ChatSession:
         # Check for memory references (e.g., "run that program")
         referenced_execution = self._resolve_memory_reference(user_input)
         if referenced_execution:
-            logger.info(
-                f"Resolved memory reference: {referenced_execution.description}"
-            )
+            logger.info(f"Resolved memory reference: {referenced_execution.description}")
             yield f"\n📍 Found reference to: {referenced_execution.description}\n"
             if referenced_execution.file_locations:
                 yield f"📁 Files: {', '.join(referenced_execution.file_locations)}\n\n"
@@ -1454,9 +1408,7 @@ class ChatSession:
 
                 # Check for code intent with reasonable confidence
                 # (lowered threshold to 0.3 for better catch rate)
-                should_use_dual_exec = (
-                    intent == SemanticIntent.CODE and confidence >= 0.3
-                )
+                should_use_dual_exec = intent == SemanticIntent.CODE and confidence >= 0.3
 
                 if should_use_dual_exec:
                     logger.debug(
@@ -1483,9 +1435,7 @@ class ChatSession:
                         )
                         return
                     except Exception as e:
-                        logger.exception(
-                            f"Error using dual execution orchestrator: {e}"
-                        )
+                        logger.exception(f"Error using dual execution orchestrator: {e}")
                         logger.info("Falling back to standard processing")
 
             # If controller is available, use the dual-model stack
@@ -1589,10 +1539,12 @@ class ChatSession:
 
             # Generate and yield conversational response at the end
             yield "\n\n💬 Response: "
-            conversational_response = self._generate_conversational_response(
-                user_input, result
-            )
-            yield conversational_response
+            conversational_chunks = []
+            for chunk in self._generate_conversational_response(user_input, result):
+                yield chunk
+                conversational_chunks.append(chunk)
+
+            conversational_response = "".join(conversational_chunks)
             full_response += f"\n\n💬 Response: {conversational_response}"
 
             # Update the stored message with the full response
