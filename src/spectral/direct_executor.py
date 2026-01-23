@@ -475,7 +475,7 @@ class CodeValidator:
         return visitor.issues
 
     def _check_undefined_variables(self, tree: ast.AST) -> List[ValidationIssue]:
-        """Check for obvious undefined variable usage."""
+        """Check for obvious undefined variable usage with enhanced scope tracking."""
         self.checks_performed.append("undefined_variables")
         issues: List[ValidationIssue] = []
 
@@ -483,8 +483,10 @@ class CodeValidator:
             def __init__(self):
                 self.issues: List[ValidationIssue] = []
                 self.defined_vars: Set[str] = set()
-                self.used_before_def: Set[str] = set()
+                self.used_before_def: dict[str, int] = {}  # var_name -> line_number
                 self.imported_modules: Set[str] = set()
+                self.function_scopes: list[Set[str]] = []  # Stack of function scopes
+                self.in_function = False
 
             def visit_Import(self, node: ast.Import):
                 # Track imported modules
@@ -506,10 +508,12 @@ class CodeValidator:
                 # Add function name to defined variables
                 self.defined_vars.add(node.name)
 
-                # Save current scope
-                old_vars = self.defined_vars.copy()
+                # Enter new function scope
+                self.function_scopes.append(self.defined_vars.copy())
+                old_in_function = self.in_function
+                self.in_function = True
 
-                # Add function parameters to defined variables
+                # Add function parameters to current scope
                 for arg in node.args.args:
                     self.defined_vars.add(arg.arg)
 
@@ -517,20 +521,60 @@ class CodeValidator:
                 self.generic_visit(node)
 
                 # Restore scope
-                self.defined_vars = old_vars
+                if self.function_scopes:
+                    self.defined_vars = self.function_scopes.pop()
+                self.in_function = old_in_function
 
-            def visit_For(self, node: ast.For):
-                # Add loop variable to defined variables
-                if isinstance(node.target, ast.Name):
-                    self.defined_vars.add(node.target.id)
+            def visit_With(self, node: ast.With):
+                # Context manager variables (e.g., "with open() as f:")
+                for item in node.items:
+                    if item.optional_vars:
+                        if isinstance(item.optional_vars, ast.Name):
+                            self.defined_vars.add(item.optional_vars.id)
                 self.generic_visit(node)
 
+            def visit_ExceptHandler(self, node: ast.ExceptHandler):
+                # Exception handler variable (e.g., "except Exception as e:")
+                if node.name:
+                    self.defined_vars.add(node.name)
+                self.generic_visit(node)
+
+            def visit_For(self, node: ast.For):
+                # Add loop variable to defined variables BEFORE visiting body
+                if isinstance(node.target, ast.Name):
+                    self.defined_vars.add(node.target.id)
+                elif isinstance(node.target, ast.Tuple):
+                    # Handle tuple unpacking: for a, b in items:
+                    for elt in node.target.elts:
+                        if isinstance(elt, ast.Name):
+                            self.defined_vars.add(elt.id)
+                self.generic_visit(node)
+
+            def visit_ListComp(self, node: ast.ListComp):
+                # List comprehension creates its own scope
+                old_vars = self.defined_vars.copy()
+                # Add comprehension variables
+                for generator in node.generators:
+                    if isinstance(generator.target, ast.Name):
+                        self.defined_vars.add(generator.target.id)
+                self.generic_visit(node)
+                self.defined_vars = old_vars
+
             def visit_Assign(self, node: ast.Assign):
-                # Mark all assigned names as defined
+                # IMPORTANT: Visit RHS first to detect use-before-def
+                for value in ast.walk(node.value):
+                    if isinstance(value, ast.Name) and isinstance(value.ctx, ast.Load):
+                        self._check_variable_usage(value)
+
+                # Now mark LHS as defined
                 for target in node.targets:
                     if isinstance(target, ast.Name):
                         self.defined_vars.add(target.id)
-                self.generic_visit(node)
+                    elif isinstance(target, ast.Tuple):
+                        # Handle tuple unpacking: a, b = values
+                        for elt in target.elts:
+                            if isinstance(elt, ast.Name):
+                                self.defined_vars.add(elt.id)
 
             def visit_AugAssign(self, node: ast.AugAssign):
                 # x += 1 requires x to be defined first
@@ -539,62 +583,119 @@ class CodeValidator:
                         node.target.id not in self.defined_vars
                         and node.target.id not in self.imported_modules
                     ):
-                        self.used_before_def.add(node.target.id)
+                        self.used_before_def[node.target.id] = node.lineno
                     self.defined_vars.add(node.target.id)
                 self.generic_visit(node)
+
+            def _check_variable_usage(self, node: ast.Name):
+                """Check if a variable is used before definition."""
+                # Skip common builtins
+                builtins = {
+                    "print",
+                    "len",
+                    "range",
+                    "str",
+                    "int",
+                    "float",
+                    "list",
+                    "dict",
+                    "set",
+                    "tuple",
+                    "True",
+                    "False",
+                    "None",
+                    "open",
+                    "input",
+                    "type",
+                    "isinstance",
+                    "hasattr",
+                    "getattr",
+                    "setattr",
+                    "__name__",
+                    "__main__",
+                    "abs",
+                    "all",
+                    "any",
+                    "ascii",
+                    "bin",
+                    "bool",
+                    "bytes",
+                    "callable",
+                    "chr",
+                    "classmethod",
+                    "compile",
+                    "complex",
+                    "delattr",
+                    "dir",
+                    "divmod",
+                    "enumerate",
+                    "eval",
+                    "exec",
+                    "filter",
+                    "format",
+                    "frozenset",
+                    "globals",
+                    "hash",
+                    "help",
+                    "hex",
+                    "id",
+                    "iter",
+                    "locals",
+                    "map",
+                    "max",
+                    "min",
+                    "next",
+                    "object",
+                    "oct",
+                    "ord",
+                    "pow",
+                    "property",
+                    "repr",
+                    "reversed",
+                    "round",
+                    "setattr",
+                    "slice",
+                    "sorted",
+                    "staticmethod",
+                    "sum",
+                    "super",
+                    "vars",
+                    "zip",
+                    "Exception",
+                    "BaseException",
+                    "KeyError",
+                    "ValueError",
+                }
+
+                if (
+                    node.id not in self.defined_vars
+                    and node.id not in builtins
+                    and node.id not in self.imported_modules
+                ):
+                    self.used_before_def[node.id] = node.lineno
 
             def visit_Name(self, node: ast.Name):
                 # Check if variable is used before definition
                 if isinstance(node.ctx, ast.Load):
-                    # Skip common builtins and imports
-                    builtins = {
-                        "print",
-                        "len",
-                        "range",
-                        "str",
-                        "int",
-                        "float",
-                        "list",
-                        "dict",
-                        "set",
-                        "tuple",
-                        "True",
-                        "False",
-                        "None",
-                        "open",
-                        "input",
-                        "type",
-                        "isinstance",
-                        "hasattr",
-                        "getattr",
-                        "setattr",
-                        "__name__",
-                        "__main__",
-                    }
-                    if (
-                        node.id not in self.defined_vars
-                        and node.id not in builtins
-                        and node.id not in self.imported_modules
-                    ):
-                        self.used_before_def.add(node.id)
+                    self._check_variable_usage(node)
                 self.generic_visit(node)
 
         visitor = VariableVisitor()
         visitor.visit(tree)
 
         # Report variables that might be used before definition
-        # Filter out common false positives
-        for var in visitor.used_before_def:
+        for var, line_num in visitor.used_before_def.items():
             # Skip if it looks like it might be a module attribute
             if var in visitor.imported_modules:
                 continue
 
             issues.append(
                 ValidationIssue(
-                    severity="warning",
+                    severity="error",  # Elevated to error for better detection
                     issue_type="undefined_variable",
                     message=f"Variable '{var}' may be used before definition",
-                    suggestion=f"Ensure '{var}' is defined before use",
+                    line_number=line_num,
+                    suggestion=f"Ensure '{var}' is defined before line {line_num}",
                 )
             )
 
@@ -1076,7 +1177,7 @@ class DirectExecutor:
         self, user_request: str, language: str = "python", target_filename: Optional[str] = None
     ) -> str:
         """
-        Generate code from user request with learned patterns.
+        Generate code from user request with learned patterns and validation feedback loop.
 
         Args:
             user_request: User's natural language request
@@ -1110,28 +1211,79 @@ class DirectExecutor:
             prompt += "Make sure to use this filename in any internal references or save logic."
 
         try:
-            # STREAMING GENERATION: Emit chunks as they arrive
-            code_chunks = []
-            for chunk in self.llm_client.generate_stream(prompt):
-                code_chunks.append(chunk)
-                # Emit chunk event for sandbox viewer to display in real-time
-                self._emit_gui_event("code_chunk_generated", {"chunk": chunk})
+            # Generation with validation feedback loop (up to 3 attempts)
+            max_validation_attempts = 3
+            validation_feedback = None
 
-            # Combine all chunks and clean
-            full_code = ''.join(code_chunks)
-            cleaned_code = clean_code(str(full_code))
+            for attempt in range(max_validation_attempts):
+                # Build prompt with validation feedback from previous attempt
+                current_prompt = prompt
+                if validation_feedback:
+                    current_prompt += f"\n\n{validation_feedback}"
 
-            # Handle desktop save request
-            if save_to_desktop:
-                cleaned_code = self._modify_for_desktop_save(cleaned_code, user_request)
+                # STREAMING GENERATION: Emit chunks as they arrive
+                code_chunks = []
+                for chunk in self.llm_client.generate_stream(current_prompt):
+                    code_chunks.append(chunk)
+                    # Emit chunk event for sandbox viewer to display in real-time
+                    self._emit_gui_event("code_chunk_generated", {"chunk": chunk})
 
-            logger.debug(f"Generated {len(cleaned_code)} characters of {language} code")
+                # Combine all chunks and clean
+                full_code = "".join(code_chunks)
+                cleaned_code = clean_code(str(full_code))
 
-            # Emit final code generated event to sandbox viewer
+                # Handle desktop save request
+                if save_to_desktop:
+                    cleaned_code = self._modify_for_desktop_save(cleaned_code, user_request)
+
+                logger.debug(
+                    f"Generated {len(cleaned_code)} characters of {language} code (attempt {attempt + 1})"
+                )
+
+                # Validate generated code BEFORE returning
+                validation_result = self.code_validator.validate(cleaned_code)
+
+                # Check for critical validation issues
+                if not validation_result.has_errors():
+                    # Code is valid, emit success and return
+                    logger.info(f"Code validation passed on attempt {attempt + 1}")
+                    self._emit_gui_event("code_generated", {"code": cleaned_code})
+                    self._emit_gui_event("code_generation_complete", {})
+                    return str(cleaned_code)
+
+                # Validation failed - prepare feedback for next attempt
+                logger.warning(f"Code validation failed on attempt {attempt + 1}")
+                error_messages = validation_result.get_error_messages()
+                warning_messages = validation_result.get_warning_messages()
+
+                # Build detailed feedback for the LLM
+                validation_feedback = self._build_validation_feedback(
+                    error_messages, warning_messages, cleaned_code, user_request
+                )
+
+                logger.info(
+                    f"Regenerating code with validation feedback (attempt {attempt + 2}/{max_validation_attempts})"
+                )
+
+                # Emit validation failure event
+                self._emit_gui_event(
+                    "validation_failed",
+                    {
+                        "attempt": attempt + 1,
+                        "errors": error_messages,
+                        "warnings": warning_messages,
+                    },
+                )
+
+            # If we reach here, all validation attempts failed
+            # Return the last generated code anyway (execution will handle errors)
+            logger.warning(
+                f"Code validation failed after {max_validation_attempts} attempts, returning last version"
+            )
             self._emit_gui_event("code_generated", {"code": cleaned_code})
             self._emit_gui_event("code_generation_complete", {})
-
             return str(cleaned_code)
+
         except Exception as e:
             logger.error(f"Failed to generate code: {e}")
             self._emit_gui_event("error_occurred", {"error": str(e)})
@@ -2095,6 +2247,103 @@ Rules:
         # Add timestamp
         timestamp = int(time.time())
         return f"{filename_base}_{timestamp}.py"
+
+    def _build_validation_feedback(
+        self,
+        error_messages: List[str],
+        warning_messages: List[str],
+        failed_code: str,
+        user_request: str,
+    ) -> str:
+        """
+        Build detailed validation feedback for code regeneration.
+
+        Args:
+            error_messages: List of validation error messages
+            warning_messages: List of validation warning messages
+            failed_code: The code that failed validation
+            user_request: Original user request
+
+        Returns:
+            Formatted feedback string for LLM
+        """
+        feedback = (
+            "\n\n═══════════════════════════════════════════════════════════════════════════════\n"
+        )
+        feedback += "⚠️ VALIDATION FAILED - CODE REGENERATION REQUIRED\n"
+        feedback += (
+            "═══════════════════════════════════════════════════════════════════════════════\n\n"
+        )
+        feedback += (
+            "The previously generated code has CRITICAL VALIDATION ERRORS that must be fixed.\n\n"
+        )
+
+        if error_messages:
+            feedback += "🔴 CRITICAL ERRORS (Must Fix):\n"
+            for i, error in enumerate(error_messages, 1):
+                feedback += f"   {i}. {error}\n"
+            feedback += "\n"
+
+        if warning_messages:
+            feedback += "⚠️ WARNINGS (Should Fix):\n"
+            for i, warning in enumerate(warning_messages, 1):
+                feedback += f"   {i}. {warning}\n"
+            feedback += "\n"
+
+        feedback += "REQUIRED FIXES:\n\n"
+
+        # Provide specific guidance based on error types
+        for error in error_messages:
+            if "undefined" in error.lower() or "not defined" in error.lower():
+                # Extract variable name if possible
+                import re
+
+                match = re.search(r"'([^']+)'", error)
+                var_name = match.group(1) if match else "variable"
+
+                feedback += f"• Variable Scope Error: '{var_name}' is used before definition\n"
+                feedback += f"  FIX: Define '{var_name}' BEFORE using it. Check:\n"
+                feedback += f"  - Is '{var_name}' defined in the correct scope?\n"
+                feedback += f"  - If it's in a function, is it returned and assigned?\n"
+                feedback += f"  - If it's in a loop, is it initialized before the loop?\n"
+                feedback += f"  - Initialize with a default value: {var_name} = None\n\n"
+
+            elif "infinite loop" in error.lower():
+                feedback += "• Infinite Loop Error: 'while True' without break or timeout\n"
+                feedback += "  FIX: Add one of:\n"
+                feedback += "  - break condition inside loop\n"
+                feedback += "  - Timeout check with time.time()\n"
+                feedback += "  - Iteration counter with max limit\n\n"
+
+            elif "blocking call" in error.lower() or "input()" in error.lower():
+                feedback += "• Blocking Call Error: input() detected\n"
+                feedback += "  FIX: Replace ALL input() calls with hardcoded values\n"
+                feedback += "  - Example: name = 'test_user'  # was: input('Enter name: ')\n\n"
+
+            elif "timeout" in error.lower():
+                feedback += "• Missing Timeout Error: I/O operation without timeout\n"
+                feedback += "  FIX: Add timeout parameters:\n"
+                feedback += "  - socket.settimeout(30)\n"
+                feedback += "  - requests.get(url, timeout=10)\n"
+                feedback += "  - thread.join(timeout=30)\n\n"
+
+        feedback += "REGENERATION INSTRUCTIONS:\n"
+        feedback += "1. READ the errors above carefully\n"
+        feedback += "2. UNDERSTAND the root cause of each error\n"
+        feedback += "3. GENERATE completely NEW, corrected code\n"
+        feedback += "4. VERIFY all variables are defined before use\n"
+        feedback += "5. VERIFY no infinite loops or blocking calls\n"
+        feedback += "6. VERIFY the code matches the original request\n\n"
+
+        feedback += f"Original Request: {user_request}\n\n"
+        feedback += "Generate corrected code that:\n"
+        feedback += "✓ Fixes ALL validation errors listed above\n"
+        feedback += "✓ Still fulfills the original user request\n"
+        feedback += "✓ Is complete and immediately executable\n"
+        feedback += "✓ Has proper variable scoping and initialization\n\n"
+        feedback += "Return ONLY the corrected Python code in a ```python code block.\n"
+
+        return feedback
 
     def _build_code_generation_prompt(
         self, user_request: str, language: str, learned_patterns: Optional[list] = None
