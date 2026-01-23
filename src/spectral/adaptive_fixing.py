@@ -264,6 +264,19 @@ class AdaptiveFixEngine:
         """
         details_lower = error_details.lower()
 
+        # NOT_RETRYABLE: Unicode encoding issues (often Windows cp1252/charmap)
+        if any(
+            keyword in details_lower
+            for keyword in [
+                "charmap",
+                "codec can't encode",
+                "unicodeencodeerror",
+                "unicodedecodeerror",
+                "can't encode character",
+            ]
+        ):
+            return ErrorCategory.NOT_RETRYABLE
+
         # NOT_RETRYABLE: Environmental issues that can't be fixed by retrying
         if any(
             keyword in details_lower
@@ -362,6 +375,31 @@ class AdaptiveFixEngine:
             FailureDiagnosis with appropriate response
         """
         details_lower = error_details.lower()
+
+        # Unicode encoding issues
+        if any(
+            keyword in details_lower
+            for keyword in [
+                "charmap",
+                "codec can't encode",
+                "unicodeencodeerror",
+                "unicodedecodeerror",
+                "can't encode character",
+            ]
+        ):
+            return FailureDiagnosis(
+                error_type=error_type,
+                error_details=error_details,
+                root_cause=(
+                    "Unicode encoding error (common on Windows when non-ASCII symbols are used)"
+                ),
+                suggested_fix=(
+                    "Force UTF-8 when writing/executing files and avoid Unicode-only symbols "
+                    "like √/±/∞ in source and UI strings."
+                ),
+                fix_strategy="abort",
+                confidence=1.0,
+            )
 
         # Permission/privilege errors
         if any(

@@ -19,7 +19,14 @@ from spectral.mistake_learner import MistakeLearner
 from spectral.persistent_memory import MemoryModule
 from spectral.research_intent_handler import ResearchIntentHandler
 from spectral.retry_parsing import format_attempt_progress, parse_retry_limit
-from spectral.utils import AUTONOMOUS_CODE_REQUIREMENT, SmartInputHandler, clean_code
+from spectral.utils import (
+    AUTONOMOUS_CODE_REQUIREMENT,
+    SmartInputHandler,
+    clean_code,
+    ensure_utf8_header,
+    is_unicode_encoding_error,
+    sanitize_unicode_chars,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +280,35 @@ Save any generated files to the Desktop."""
 
                         yield f"   ❌ Error detected in step {step.step_number} ({progress})\n"
 
+                        # Special-case Unicode encoding failures to avoid infinite LLM retry loops.
+                        if is_unicode_encoding_error(error_output or full_output):
+                            if attempt == 1:
+                                yield (
+                                    "   🔤 Unicode encoding error detected. Retrying with UTF-8 header "
+                                    "and UTF-8 subprocess settings...\n"
+                                )
+                                step.code = ensure_utf8_header(step.code or "")
+                                step.status = "retrying"
+                                attempt += 1
+                                continue
+
+                            if attempt == 2:
+                                yield (
+                                    "   🔤 Unicode encoding error persists. Retrying with sanitized ASCII-only "
+                                    "code...\n"
+                                )
+                                step.code = sanitize_unicode_chars(step.code or "")
+                                step.status = "retrying"
+                                attempt += 1
+                                continue
+
+                            step.status = "failed"
+                            yield (
+                                "   ❌ Unicode encoding error could not be resolved after 2 attempts. "
+                                "Aborting step.\n\n"
+                            )
+                            break
+
                         # Parse error
                         error_type, error_details = self.execution_monitor.parse_error_from_output(
                             error_output or full_output
@@ -408,7 +444,11 @@ You have FULL SYSTEM ACCESS. Generate COMPLETE, WORKING code for this specific s
    - No user interaction required
    - Print progress messages
 
-5. WINDOWS PATHS:
+5. ENCODING (WINDOWS SAFETY):
+   - Avoid Unicode-only math symbols in code/UI strings (e.g., √, ±, ∞). Prefer ASCII like "sqrt", "+/-", "inf".
+   - If non-ASCII is truly required, include a UTF-8 coding cookie at the top: # -*- coding: utf-8 -*-
+
+6. WINDOWS PATHS:
    - Use pathlib.Path or os.path
    - Home: C:\\Users\\{username}
    - Desktop: C:\\Users\\{username}\\Desktop
@@ -446,6 +486,7 @@ Rules:
         try:
             raw_code = self.llm_client.generate(prompt)
             code = clean_code(str(raw_code))
+            code = ensure_utf8_header(code)
             logger.debug(f"Generated code for step {step.step_number}: {len(code)} characters")
             return str(code)
         except Exception as e:
