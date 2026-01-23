@@ -1049,6 +1049,29 @@ Use ONLY Python standard library modules - NO external packages (numpy, pandas, 
 - For data: use built-in dict, list, json
 Available: os, sys, json, re, math, pathlib, subprocess, datetime, threading, etc."""
 
+        # Check for variable scope errors and add special instructions
+        scope_error_warning = ""
+        error_lower = diagnosis.error_details.lower()
+        if any(
+            keyword in error_lower
+            for keyword in ["not defined", "undefined", "nameerror", "referenced before assignment"]
+        ):
+            scope_error_warning = """
+
+⚠️ VARIABLE SCOPE ERROR DETECTED:
+This is a critical scope/definition error. You MUST:
+1. Identify all variables used in the code
+2. Ensure EVERY variable is defined BEFORE it is used
+3. Check function scopes - variables inside functions must be returned and assigned
+4. Initialize variables at module level or start of main execution
+5. For variables used in loops, initialize them BEFORE the loop
+6. Check that function return values are properly captured and assigned
+
+Example fixes:
+- If variable 'result' is used but not defined: Add "result = None" before use
+- If function returns 'x' but you reference it outside: Assign it: "x = my_function()"
+- If 'count' is used in a loop but not initialized: Add "count = 0" before loop"""
+
         prompt = f"""{AUTONOMOUS_CODE_REQUIREMENT}
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1066,7 +1089,7 @@ DIAGNOSIS:
 ORIGINAL CODE (That failed):
 ```python
 {step.code or "No code provided"}
-```{stdlib_requirement}
+```{stdlib_requirement}{scope_error_warning}
 
 ═══════════════════════════════════════════════════════════════════════════════
 🎯 YOUR TASK: Generate COMPLETE, WORKING fixed code

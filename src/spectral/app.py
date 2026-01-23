@@ -113,10 +113,17 @@ class GUIApp(customtkinter.CTk):
         logger.info("GUI application initialized")
 
     def _setup_ui(self) -> None:
-        """Set up the user interface layout."""
-        # Main container - split into chat area (top) and sandbox viewer (bottom)
-        self.main_frame = customtkinter.CTkFrame(self)
-        self.main_frame.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        """Set up the user interface layout with tabbed interface."""
+        # Create tabbed interface - Chat and Sandbox tabs
+        self.tab_view = customtkinter.CTkTabview(self, width=900, height=800)
+        self.tab_view.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+        # Add tabs
+        self.chat_tab = self.tab_view.add("Chat")
+        self.sandbox_tab = self.tab_view.add("Sandbox")
+
+        # Set Chat as default tab
+        self.tab_view.set("Chat")
 
         # Sidebar
         sidebar_frame = customtkinter.CTkFrame(self, width=250, corner_radius=10)
@@ -160,15 +167,10 @@ class GUIApp(customtkinter.CTk):
         self.actions_text.pack(pady=5, padx=5, fill="both", expand=True)
         self.actions_text.configure(state="disabled")
 
-        # Chat area
-        chat_title = customtkinter.CTkLabel(
-            self.main_frame, text="Chat", font=("Arial", 14, "bold")
-        )
-        chat_title.pack(pady=5)
-
+        # ========== CHAT TAB CONTENT ==========
         # Use standard tk.Text instead of CTkTextbox to support tags for coloring
         self.chat_text = tk.Text(
-            self.main_frame,
+            self.chat_tab,
             background=self._get_dark_bg_color(),
             foreground="white",
             insertbackground="white",
@@ -176,13 +178,13 @@ class GUIApp(customtkinter.CTk):
             wrap="word",
             state="disabled",
         )
-        self.chat_text.pack(fill="both", expand=True, pady=5)
+        self.chat_text.pack(fill="both", expand=True, pady=5, padx=5)
         # Configure tag for user messages (blue color)
         self.chat_text.tag_configure("user_message", foreground="#1E90FF")
 
         # Plan/Execution status
-        status_frame = customtkinter.CTkFrame(self.main_frame)
-        status_frame.pack(pady=5, fill="x")
+        status_frame = customtkinter.CTkFrame(self.chat_tab)
+        status_frame.pack(pady=5, fill="x", padx=5)
 
         self.plan_status = customtkinter.CTkLabel(
             status_frame, text="Plan: Idle", font=("Arial", 10), text_color="gray"
@@ -194,19 +196,9 @@ class GUIApp(customtkinter.CTk):
         )
         self.exec_status.pack(side="left", padx=5)
 
-        # Sandbox viewer toggle button
-        self.sandbox_toggle_button = customtkinter.CTkButton(
-            status_frame,
-            text="📊 Show Sandbox Viewer",
-            command=self._toggle_sandbox_viewer,
-            width=150,
-            font=("Arial", 10),
-        )
-        self.sandbox_toggle_button.pack(side="right", padx=5)
-
         # Input area
-        input_frame = customtkinter.CTkFrame(self.main_frame)
-        input_frame.pack(pady=5, fill="x")
+        input_frame = customtkinter.CTkFrame(self.chat_tab)
+        input_frame.pack(pady=5, fill="x", padx=5)
 
         self.input_text = customtkinter.CTkEntry(
             input_frame, placeholder_text="Enter command or speak 'Spectral...'"
@@ -229,24 +221,10 @@ class GUIApp(customtkinter.CTk):
         )
         self.cancel_button.pack(side="left", padx=5)
 
-        # Sandbox viewer (initially hidden)
-        self.sandbox_frame = customtkinter.CTkFrame(
-            self.main_frame, fg_color=("#1E1E1E", "#111111")
-        )
-        self.sandbox_frame.pack(fill="both", expand=True, padx=5, pady=(5, 0))
-        self.sandbox_frame.pack_forget()  # Initially hidden
-
-        self.sandbox_viewer = SandboxViewer(self.sandbox_frame, debug_mode=self.sandbox_debug_mode)
-        self.sandbox_viewer.pack(fill="both", expand=True)
-
-    def _toggle_sandbox_viewer(self) -> None:
-        """Toggle sandbox viewer visibility."""
-        if self.sandbox_frame.winfo_viewable():
-            self.sandbox_frame.pack_forget()
-            self.sandbox_toggle_button.configure(text="📊 Show Sandbox Viewer")
-        else:
-            self.sandbox_frame.pack(fill="both", expand=True, padx=5, pady=(5, 0))
-            self.sandbox_toggle_button.configure(text="📊 Hide Sandbox Viewer")
+        # ========== SANDBOX TAB CONTENT ==========
+        # Full sandbox viewer in its own tab
+        self.sandbox_viewer = SandboxViewer(self.sandbox_tab, debug_mode=self.sandbox_debug_mode)
+        self.sandbox_viewer.pack(fill="both", expand=True, padx=5, pady=5)
 
     def _run_on_ui_thread(self, func: Callable[[], None]) -> None:
         if threading.current_thread() is threading.main_thread():
