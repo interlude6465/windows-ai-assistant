@@ -93,6 +93,7 @@ class ExecutionMonitor:
         self.active_listeners: Dict[str, TrackedListener] = {}
         self.execution_history: List[ExecutionEvent] = []
         self.status_callbacks: List[Callable[[str, Dict], None]] = []
+        self.gui_callback: Optional[Callable[[str, dict], None]] = None
 
         # Threading
         self._monitoring = False
@@ -121,6 +122,23 @@ class ExecutionMonitor:
         with self._lock:
             if callback in self.status_callbacks:
                 self.status_callbacks.remove(callback)
+
+    def set_gui_callback(self, callback: Optional[Callable[[str, dict], None]]) -> None:
+        """
+        Set the GUI callback for sandbox viewer events.
+
+        Args:
+            callback: Optional callback function that receives event_type and data
+        """
+        self.gui_callback = callback
+
+    def _emit_gui_event(self, event_type: str, data: dict) -> None:
+        """Emit event to GUI callback."""
+        if self.gui_callback:
+            try:
+                self.gui_callback(event_type, data)
+            except Exception as e:
+                logger.debug(f"GUI callback error: {e}")
 
     def start_monitoring(self) -> None:
         """Start the monitoring thread."""
