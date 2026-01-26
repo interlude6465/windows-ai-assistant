@@ -113,8 +113,8 @@ class MetasploitExecutor:
                 ["which", "msfconsole"], capture_output=True, text=True, timeout=5
             )
             return result.returncode == 0
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-            logger.warning("Could not verify msfconsole availability")
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+            logger.warning(f"Metasploit not found, Metasploit features disabled: {e}")
             return False
 
     def set_output_callback(self, callback: Callable[[str], None]) -> None:
