@@ -10,11 +10,16 @@ Monitors:
 """
 
 import logging
+import os
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from pathlib import Path
+from typing import Callable, Dict, Generator, List, Optional
 
 from spectral.metasploit_executor import ListenerInfo, SessionInfo
 
@@ -542,3 +547,72 @@ class ExecutionMonitor:
             self.stop_monitoring()
 
         logger.info("Execution monitor cleanup completed")
+
+    def execute_step(self, step) -> Generator[tuple[str, bool, Optional[str]], None, None]:
+        """
+        Execute a single code step and stream output.
+
+        Args:
+            step: CodeStep object with code to execute
+
+        Yields:
+            Tuples of (line, is_error, error_msg) for each output line
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+        import tempfile
+
+        code = getattr(step, "code", "")
+        if not code:
+            yield "⚠️ No code to execute\n", False, None
+            return
+
+        # Write code to temp file
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            ) as f:
+                f.write(code)
+                temp_file = f.name
+
+            # Execute the code
+            import subprocess
+
+            creation_flags = 0
+            if sys.platform == "win32":
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+            result = subprocess.run(
+                [sys.executable, temp_file],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                creationflags=creation_flags,
+            )
+
+            # Yield stdout
+            if result.stdout:
+                for line in result.stdout.splitlines(keepends=True):
+                    yield line, False, None
+
+            # Yield stderr as errors
+            if result.stderr:
+                for line in result.stderr.splitlines(keepends=True):
+                    yield line, True, line
+
+        except subprocess.TimeoutExpired:
+            yield "⏰ Execution timed out after 30 seconds\n", True, "Execution timeout"
+        except Exception as e:
+            yield f"❌ Execution error: {str(e)}\n", True, str(e)
+        finally:
+            # Clean up temp file
+            try:
+                import os
+
+                if "temp_file" in locals():
+                    os.unlink(temp_file)
+            except Exception:
+                pass  # Ignore cleanup errors

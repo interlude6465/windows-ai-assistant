@@ -83,31 +83,34 @@ class SemanticIntentClassifier:
     def _build_classification_prompt(self, user_input: str) -> str:
         """Build the classification prompt for the LLM."""
 
-        prompt = f"""Classify the following user request into one of these intents:
+        prompt = f"""Classify the following user request into one of these intents.
+
+IMPORTANT: Default to CHAT unless there is clear evidence of technical intent.
+
+**CHAT**: Casual conversation, greetings, general questions, how-are-you,
+unrelated to technical tasks. This is the DEFAULT category for non-technical input.
+- Examples: "hello", "how are you", "what's up", "how are you going",
+"what are you doing", "tell me a joke", "what's the weather", "thanks", "hi"
 
 **CODE**: Code generation, programming, scripting, creating software,
-writing functions/classes
+writing functions/classes, build programs. Must contain coding keywords.
 - Examples: "make python keylogger", "write a script", "create function",
-"build program"
+"build program", "generate code", "write python", "program a"
 
 **EXPLOITATION**: Penetration testing, exploiting vulnerabilities,
-gaining access, attacks, metasploit
+gaining access, attacks, metasploit, hacking. Must contain attack-related keywords.
 - Examples: "remote access windows with metasploit", "get shell on target",
-"exploit SSH", "RCE attack"
+"exploit SSH", "RCE attack", "hack the system", "compromise target"
 
 **RECONNAISSANCE**: Scanning, enumeration, discovering services/ports,
-target analysis
+target analysis. Must contain scanning/network keywords.
 - Examples: "find open ports", "scan for services", "enumerate target",
-"what services are running"
+"what services are running", "nmap scan", "port scan"
 
 **RESEARCH**: Information gathering, vulnerability lookup, CVE research,
-technical questions
+technical questions about security topics.
 - Examples: "what vulnerabilities in Apache 2.4.41",
 "research CVE-2021-41773", "explain EternalBlue"
-
-**CHAT**: Casual conversation, greetings, general questions,
-unrelated to technical tasks
-- Examples: "hello", "how are you", "what's the weather", "tell me a joke"
 
 **User Request:**
 {user_input}
@@ -236,6 +239,38 @@ Reason: [brief explanation]"""
             Tuple of (SemanticIntent, confidence_score)
         """
         input_lower = user_input.lower().strip()
+        words = input_lower.split()
+
+        # Common chat/greeting patterns - check FIRST before anything else
+        # Use word boundaries to avoid matching "how" in "windows"
+        chat_patterns = [
+            r"^hello\b",
+            r"^hi\b",
+            r"^hey\b",
+            r"\bhow are you\b",
+            r"\bhow are you going\b",
+            r"\bwhat are you (?:up to|doing)\b",
+            r"\bwhat'?s up\b",
+            r"^\b(?:thanks|thank you)\b",
+            r"^\b(?:bye|goodbye)\b",
+            r"\btell me a joke\b",
+            r"\bhow'?s it going\b",
+            r"\bwhat'?s the weather\b",
+        ]
+
+        # Check for chat/greeting patterns first - these are clearly chat intent
+        for pattern in chat_patterns:
+            if re.search(pattern, input_lower):
+                logger.info(f"Fallback classification: CHAT (greeting pattern detected)")
+                return SemanticIntent.CHAT, 0.9  # High confidence for greetings
+
+        # Very short inputs (1-2 words) without technical keywords are likely chat
+        if len(words) <= 2 and len(user_input) < 15:
+            # No technical keywords detected in very short input
+            tech_keywords = {"code", "script", "hack", "exploit", "scan", "create", "make", "build", "write"}
+            if not any(kw in input_lower for kw in tech_keywords):
+                logger.info(f"Fallback classification: CHAT (very short non-technical input)")
+                return SemanticIntent.CHAT, 0.8
 
         # Heuristic keywords for each intent
         # Include common typos and variations
@@ -320,18 +355,26 @@ Reason: [brief explanation]"""
             SemanticIntent.CHAT: 0,
         }
 
-        max_score = max(scores.values())
-
-        if max_score == 0:
-            return SemanticIntent.CHAT, 0.3
-
-        # Get intent with highest score
-        intent = max(scores, key=lambda k: scores[k])
-        confidence = min(0.7, 0.4 + max_score * 0.1)
+        # Check exploitation first as it's most specific
+        if exploitation_score > 0:
+            intent = SemanticIntent.EXPLOITATION
+            confidence = min(0.8, 0.5 + exploitation_score * 0.1)
+        elif code_score > 0:
+            intent = SemanticIntent.CODE
+            confidence = min(0.8, 0.5 + code_score * 0.1)
+        elif reconnaissance_score > 0:
+            intent = SemanticIntent.RECONNAISSANCE
+            confidence = min(0.8, 0.5 + reconnaissance_score * 0.1)
+        elif research_score > 0:
+            intent = SemanticIntent.RESEARCH
+            confidence = min(0.8, 0.5 + research_score * 0.1)
+        else:
+            # Default to CHAT
+            return SemanticIntent.CHAT, 0.7  # Higher confidence for default to chat
 
         logger.info(
             f"Fallback classification: {intent.value} "
-            f"(score: {max_score}, confidence: {confidence:.2f})"
+            f"(code: {code_score}, exploit: {exploitation_score}, recon: {reconnaissance_score}, research: {research_score}, confidence: {confidence:.2f})"
         )
 
         return intent, confidence
